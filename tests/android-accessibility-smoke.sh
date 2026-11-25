@@ -91,13 +91,14 @@ wait_for_connection 'The existing grant reconnected after an APK replacement and
 adb shell am start -W -n "$package/.MainActivity"
 has_connection
 
-# Verify the customer-visible native report, not only the service preferences.
+# Exercise the actual native report and read its classification via run-as.
+# Do not use uiautomator dump here: its UiAutomation connection can suppress
+# other accessibility services and produce a false disconnect on Android 12.
 check_report() {
     local expected=$1
     adb shell am start -W -n "$package/.AccessibilityDiagnosticsActivity" >/dev/null
-    for _ in {1..4}; do
-        adb shell uiautomator dump /sdcard/xiaoai-diagnostics.xml >/dev/null 2>&1 || continue
-        if adb shell cat /sdcard/xiaoai-diagnostics.xml | grep -Fq "$expected"; then return 0; fi
+    for _ in {1..10}; do
+        if diagnostics | grep -Fq "name=\"reportClassification\">$expected<"; then return 0; fi
         sleep 1
     done
     echo "Native diagnostics missing $expected" >&2

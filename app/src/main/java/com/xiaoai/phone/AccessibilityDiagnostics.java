@@ -105,7 +105,13 @@ final class AccessibilityDiagnostics {
                 .append("首次收到系統事件：").append(time(saved.getLong("firstEventAt",0))).append('\n')
                 .append("網頁原生橋接：").append(webBridgeSupported ? "受支持" : "不受支持")
                 .append(pageReported ? "，頁面已查詢狀態" : "，本次未觀察到頁面查詢");
-        report.append("\n診斷分類：").append(connected?"CONNECTED":grantState==GrantEvidence.YES?"GRANTED_NOT_BOUND":grantState==GrantEvidence.NO?"GRANT_NOT_DETECTED":"GRANT_UNKNOWN");
+        String classification=connected?"CONNECTED":grantState==GrantEvidence.YES?"GRANTED_NOT_BOUND":grantState==GrantEvidence.NO?"GRANT_NOT_DETECTED":"GRANT_UNKNOWN";
+        report.append("\n診斷分類：").append(classification);
+        // Store the same non-sensitive classification shown to the customer.
+        // The emulator can verify it without UI automation suppressing accessibility services.
+        if(!classification.equals(saved.getString("reportClassification",""))){
+            saved.edit().putString("reportClassification",classification).apply();
+        }
         if(!grant.secureError.isEmpty())report.append("\nSecure 讀取異常：").append(grant.secureError);
         if(!grant.managerError.isEmpty())report.append("\nManager 讀取異常：").append(grant.managerError);
         if(!grant.globalError.isEmpty())report.append("\n總開關讀取異常：").append(grant.globalError);
