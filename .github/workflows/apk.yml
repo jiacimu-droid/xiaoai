@@ -3,68 +3,48 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      full_tests:
+        description: 'Run Android 12L and 15 accessibility emulator tests'
+        type: boolean
+        default: false
 permissions:
   contents: write
 concurrency:
   group: apk-${{ github.ref }}
   cancel-in-progress: false
 jobs:
-  prepare:
-    runs-on: ubuntu-latest
-    outputs:
-      ready: ${{ steps.source.outputs.ready }}
-      revision: ${{ steps.source.outputs.revision }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Import initial source archive if needed
-        id: source
-        shell: bash
-        run: |
-          set -euo pipefail
-          archive=xiaoai-android-source.zip
-          if [ ! -f app/src/main/assets/index.html ] && [ -f "$archive" ]; then
-            test "$GITHUB_REF" = refs/heads/main
-            python3 - <<'PY'
-          from pathlib import Path, PurePosixPath
-          import zipfile, stat
-          allowed = {'app', 'ci', 'tests', 'README.md', 'build.gradle', 'settings.gradle', 'gradle.properties', '.gitignore'}
-          with zipfile.ZipFile('xiaoai-android-source.zip') as z:
-              assert z.testzip() is None, 'corrupt source archive'
-              for member in z.infolist():
-                  p = PurePosixPath(member.filename)
-                  if p.is_absolute() or '..' in p.parts or '\\' in member.filename:
-                      raise ValueError('unsafe archive path')
-                  if stat.S_ISLNK(member.external_attr >> 16):
-                      raise ValueError('symlink not allowed')
-                  if p.parts and p.parts[0] in allowed:
-                      z.extract(member, '.')
-          for required in ['app/src/main/assets/index.html', 'app/build.gradle', 'settings.gradle', 'ci/test-signing.jks', 'tests/phone-bridge.test.cjs']:
-              assert Path(required).is_file(), 'missing ' + required
-          PY
-            git config user.name 'github-actions[bot]'
-            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git add app ci tests README.md build.gradle settings.gradle gradle.properties .gitignore
-            git rm -- "$archive"
-            git commit -m "Import XiaoAi Android source project"
-            git push origin HEAD:main
-          fi
-          if [ -f app/src/main/assets/index.html ] && [ -f app/build.gradle ]; then
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-            echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          else
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "Upload xiaoai-android-source.zip to the root of main to initialize the Android project." >> "$GITHUB_STEP_SUMMARY"
-          fi
   apk:
-    needs: prepare
-    if: needs.prepare.outputs.ready == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    outputs:
+      full_tests: ${{ steps.mode.outputs.full_tests }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.revision }}
+          fetch-depth: 0
           persist-credentials: false
+      - name: Choose lightweight or accessibility regression mode
+        id: mode
+        shell: bash
+        env:
+          BEFORE: ${{ github.event.before }}
+          MANUAL_FULL: ${{ inputs.full_tests }}
+        run: |
+          set -euo pipefail
+          full=false
+          if [ "$MANUAL_FULL" = true ]; then
+            full=true
+          elif [ "$GITHUB_EVENT_NAME" = push ]; then
+            # Fail safe if the previous commit cannot be compared.
+            if ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+              full=true
+            elif ! git diff --quiet "$BEFORE" "$GITHUB_SHA" -- app/src/main/java app/src/main/kotlin app/src/main/res app/src/main/AndroidManifest.xml app/src/main/assets/phone-bridge.js app/src/main/assets/backup-bridge.js app/build.gradle build.gradle settings.gradle gradle.properties tests ci; then
+              full=true
+            fi
+          fi
+          echo "full_tests=$full" >> "$GITHUB_OUTPUT"
+          echo "Android accessibility regression: $full" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -130,7 +110,8 @@ jobs:
           path: apk-artifacts/*.apk
           if-no-files-found: error
   accessibility:
-    needs: [prepare, apk]
+    needs: apk
+    if: needs.apk.outputs.full_tests == 'true'
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -142,7 +123,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.revision }}
           persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
@@ -165,8 +145,8 @@ jobs:
           disable-animations: true
           script: bash tests/android-accessibility-smoke.sh apk-artifacts/XiaoAi.apk
   publish:
-    needs: [prepare, apk, accessibility]
-    if: github.ref == 'refs/heads/main'
+    needs: [apk, accessibility]
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.apk.result == 'success' && (needs.accessibility.result == 'success' || (needs.apk.outputs.full_tests == 'false' && needs.accessibility.result == 'skipped')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -177,14 +157,16 @@ jobs:
       - name: Publish directly downloadable APK
         env:
           GH_TOKEN: ${{ github.token }}
-          REVISION: ${{ needs.prepare.outputs.revision }}
+          REVISION: ${{ github.sha }}
+          FULL_TESTS: ${{ needs.apk.outputs.full_tests }}
         run: |
           tag="apk-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          if [ "$FULL_TESTS" = true ]; then test_status="Android 12L/15 模拟器回归通过"; else test_status="轻量构建，未运行模拟器回归"; fi
           for attempt in 1 2 3; do
             if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
               gh release upload "$tag" apk-artifacts/XiaoAi.apk --clobber --repo "$GITHUB_REPOSITORY" && exit 0
             else
-              gh release create "$tag" apk-artifacts/XiaoAi.apk --repo "$GITHUB_REPOSITORY" --target "$REVISION" --title "小爱机 APK #${GITHUB_RUN_NUMBER}" --notes "Android 测试版；来源提交 ${REVISION}。" && exit 0
+              gh release create "$tag" apk-artifacts/XiaoAi.apk --repo "$GITHUB_REPOSITORY" --target "$REVISION" --title "小爱机 APK #${GITHUB_RUN_NUMBER}" --notes "Android 测试版；来源提交 ${REVISION}。${test_status}。" && exit 0
             fi
             sleep "$((attempt * 2))"
           done
