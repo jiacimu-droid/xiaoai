@@ -32,7 +32,7 @@ public final class PhoneService extends AccessibilityService {
     private AppLocks appLocks;
     static JSONObject json(Object... kv){JSONObject o=new JSONObject();try{for(int i=0;i<kv.length;i+=2)o.put((String)kv[i],kv[i+1]);}catch(Exception ignored){}return o;}
     static JSONObject result(boolean ok,String why,String screen){return json("ok",ok,"why",why,"screen",screen);}
-    @Override protected void onServiceConnected(){instance=this;appLocks=new AppLocks(this);appLocks.inspect(null);}
+    @Override protected void onServiceConnected(){instance=this;if(appLocks!=null)appLocks.close();appLocks=new AppLocks(this);appLocks.inspect();}
     @Override public void onAccessibilityEvent(AccessibilityEvent e){if(appLocks!=null&&e!=null)appLocks.onWindow(e);}
     @Override public void onInterrupt(){cancel();}
     @Override public boolean onUnbind(Intent i){cancel();if(appLocks!=null)appLocks.close();if(instance==this)instance=null;return super.onUnbind(i);}

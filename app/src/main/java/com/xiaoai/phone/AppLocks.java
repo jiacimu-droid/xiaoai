@@ -18,6 +18,7 @@ import android.provider.Telephony;
 import android.telecom.TelecomManager;
 import android.view.Display;
 import android.view.Gravity;
+import android.view.View;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityWindowInfo;
@@ -32,14 +33,17 @@ import java.util.Locale;
 final class AppLocks {
     private static final String PREFS = "app_locks";
     private static final String RULES = "rules";
+    private static final long FOREGROUND_CHECK_MS = 180;
     private final PhoneService service;
     private final SharedPreferences prefs;
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private final AppLockAttempt attempt = new AppLockAttempt();
     private JSONObject rules;
+    private long latestExpiry;
     private LinearLayout notice;
-    private String lastTarget = "";
-    private long lastAttempt;
+    private View cover;
     private final Runnable hideNotice = this::hide;
+    private final Runnable watchdog = this::inspect;
 
     AppLocks(PhoneService service) {
         this.service = service;
@@ -48,6 +52,7 @@ final class AppLocks {
         try { saved = new JSONObject(prefs.getString(RULES, "{}")); }
         catch (Exception badData) { saved = new JSONObject(); }
         rules = saved;
+        refreshExpiry();
     }
 
     static void savePalette(Context context, JSONObject color) {
@@ -114,9 +119,7 @@ final class AppLocks {
         String reason = args.optString("reason").trim();
         copyRule(next, target.pkg, PhoneService.json("app", target.label, "until", until,
                 "reason", reason.substring(0, Math.min(80, reason.length()))));
-        JSONObject result = update(next, "已锁定" + target.label + "，解锁时间 " + format(until));
-        if (result.optBoolean("ok")) inspect(null);
-        return result;
+        return update(next, "已锁定" + target.label + "，解锁时间 " + format(until));
     }
 
     private void copyRule(JSONObject target, String pkg, JSONObject rule) {
@@ -128,36 +131,87 @@ final class AppLocks {
             return PhoneService.result(false, "无法保存应用锁", "");
         }
         rules = next;
-        lastTarget = "";
+        refreshExpiry();
         hide();
+        resetVisit();
+        inspect();
         return PhoneService.result(true, message, "");
+    }
+
+    private void refreshExpiry() {
+        latestExpiry = 0;
+        for (java.util.Iterator<String> keys = rules.keys(); keys.hasNext();) {
+            JSONObject rule = rules.optJSONObject(keys.next());
+            if (rule != null) latestExpiry = Math.max(latestExpiry, rule.optLong("until"));
+        }
     }
 
     void onWindow(AccessibilityEvent event) {
         int type = event.getEventType();
         if (type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && type != AccessibilityEvent.TYPE_WINDOWS_CHANGED) return;
         if (Build.VERSION.SDK_INT >= 30 && event.getDisplayId() > Display.DEFAULT_DISPLAY) return;
-        if (rules.length() != 0) inspect(type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ? event.getPackageName() : null);
+        if (latestExpiry > System.currentTimeMillis() || cover != null || notice != null) inspect();
     }
 
-    void inspect(CharSequence eventPackage) {
-        if (!usable()) return;
-        String pkg = foreground();
-        if (!blocked(pkg)) { lastTarget = ""; return; }
-        if (eventPackage != null && !pkg.contentEquals(eventPackage)) return;
+    void inspect() {
+        handler.removeCallbacks(watchdog);
+        long remaining = latestExpiry - System.currentTimeMillis();
+        if (remaining <= 0 || PhoneService.instance != service) {
+            resetVisit();
+            hide();
+            return;
+        }
+        boolean interactive = usable();
+        handler.postDelayed(watchdog, Math.min(remaining, interactive ? FOREGROUND_CHECK_MS : 1000));
+        if (!interactive) {
+            resetVisit();
+            hide();
+            return;
+        }
+        Foreground current = foreground();
+        if (current == null) {
+            removeCover();
+            return;
+        }
+        if (!blocked(current.pkg)) {
+            resetVisit();
+            return;
+        }
         long now = SystemClock.elapsedRealtime();
-        if (pkg.equals(lastTarget) && now - lastAttempt < 1200) return;
-        lastTarget = pkg;
-        lastAttempt = now;
-        JSONObject rule = rules.optJSONObject(pkg);
-        if (protectedApp(pkg)) return;
-        boolean backed = service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK);
-        show(rule);
-        handler.postDelayed(() -> {
-            if (usable() && rule == rules.optJSONObject(pkg) && blocked(pkg) && pkg.equals(foreground())) {
+        AppLockAttempt.Action action = attempt.observe(current.pkg, current.windowId, now);
+        if (action == AppLockAttempt.Action.BACK) {
+            if (protectedApp(current.pkg)) {
+                resetVisit();
+                return;
+            }
+            showCover();
+            boolean accepted = service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK);
+            show(rules.optJSONObject(current.pkg));
+            if (!accepted) {
+                attempt.backRejected(now);
+                handler.removeCallbacks(watchdog);
+                handler.post(watchdog);
+            }
+        } else if (action == AppLockAttempt.Action.HOME) {
+            if (protectedApp(current.pkg)) {
+                resetVisit();
+            } else {
+                showCover();
                 service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME);
             }
-        }, backed ? 450 : 0);
+        }
+    }
+
+    private void resetVisit() {
+        attempt.observe(null, -1, 0);
+        removeCover();
+    }
+
+    private void removeCover() {
+        if (cover == null) return;
+        WindowManager manager = service.getSystemService(WindowManager.class);
+        try { if (manager != null) manager.removeViewImmediate(cover); } catch (RuntimeException ignored) {}
+        cover = null;
     }
 
     private boolean usable() {
@@ -167,7 +221,14 @@ final class AppLocks {
                 && power != null && power.isInteractive();
     }
 
-    private String foreground() {
+    private static final class Foreground {
+        final String pkg;
+        final int windowId;
+
+        Foreground(String pkg, int windowId) { this.pkg = pkg; this.windowId = windowId; }
+    }
+
+    private Foreground foreground() {
         java.util.List<AccessibilityWindowInfo> windows = Build.VERSION.SDK_INT >= 30
                 ? service.getWindowsOnAllDisplays().get(Display.DEFAULT_DISPLAY) : service.getWindows();
         AccessibilityWindowInfo first = null;
@@ -177,9 +238,10 @@ final class AppLocks {
             if (!window.isActive() && !window.isFocused()) continue;
             if (first == null || window.getLayer() > first.getLayer()) first = window;
         }
-        if (first == null || first.getType() != AccessibilityWindowInfo.TYPE_APPLICATION) return "";
+        if (first == null || first.getType() != AccessibilityWindowInfo.TYPE_APPLICATION) return null;
         android.view.accessibility.AccessibilityNodeInfo root = first.getRoot();
-        return root == null || root.getPackageName() == null ? "" : root.getPackageName().toString();
+        return root == null || root.getPackageName() == null ? null :
+                new Foreground(root.getPackageName().toString(), first.getId());
     }
 
     private static String format(long until) {
@@ -195,6 +257,21 @@ final class AppLocks {
         line.setTextColor(ink);
         if (strong) line.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         return line;
+    }
+
+    private void showCover() {
+        if (cover != null) return;
+        WindowManager manager = service.getSystemService(WindowManager.class);
+        if (manager == null) return;
+        TextView view = line("应用已锁定", 16, color("ink", 0xFF302A27), true);
+        view.setGravity(Gravity.CENTER);
+        view.setBackgroundColor(color("surface", 0xFFF8F5F1) | 0xFF000000);
+        view.setOnTouchListener((ignored, event) -> true);
+        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.OPAQUE);
+        try { manager.addView(view, params); cover = view; } catch (RuntimeException ignored) {}
     }
 
     private void show(JSONObject rule) {
@@ -248,6 +325,7 @@ final class AppLocks {
 
     void close() {
         handler.removeCallbacksAndMessages(null);
+        resetVisit();
         hide();
     }
 }
