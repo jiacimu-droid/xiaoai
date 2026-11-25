@@ -19,6 +19,27 @@ has_connection() {
         grep -Fq 'name="firstEventAt"' <<<"$state"
 }
 has_disconnected() { diagnostics | grep -Eq 'name="stage">(unbind|destroy)<' ; }
+window_events() {
+    adb shell am start -W -a android.settings.SETTINGS >/dev/null
+    adb shell am start -W -n "$package/.AccessibilityDiagnosticsActivity" >/dev/null
+}
+wait_for_connection() {
+    local message=$1
+    for _ in {1..3}; do
+        # Service binding is asynchronous. A window can open before Android
+        # has finished binding, so drive additional real events while waiting.
+        window_events
+        for _ in {1..8}; do
+            if has_connection; then
+                printf '%s\n' "$message"
+                return 0
+            fi
+            sleep 1
+        done
+    done
+    printf 'Timed out: %s\n' "$message" >&2
+    return 1
+}
 wait_for() {
     local message=$1
     shift
@@ -35,20 +56,29 @@ wait_for() {
 on_failure() {
     local code=$?
     if [ "$code" -ne 0 ]; then
+        printf 'Emulator accessibility settings and app process:\n'
+        adb shell settings --user current get secure accessibility_enabled || true
+        adb shell settings --user current get secure enabled_accessibility_services || true
+        app_pid || true
         diagnostics || true
-        adb logcat -d -t 1400 | awk '/XiaoAiAccessibility|AndroidRuntime|PhoneService|FATAL EXCEPTION/' | tail -80
+        adb shell dumpsys accessibility | awk '/User state|Service|com\.xiaoai\.phone/' | cut -c1-400 | tail -80 || true
+        adb logcat -d -s XiaoAiAccessibility:I AndroidRuntime:E | tail -100 || true
+        adb logcat -d -b crash | tail -60 || true
     fi
 }
 trap on_failure EXIT
 
 adb install "$apk"
-adb shell am start -W -n "$package/.MainActivity"
-adb shell settings put secure enabled_accessibility_services "$component"
-adb shell settings put secure accessibility_enabled 1
-adb shell am start -W -a android.settings.SETTINGS
+adb shell input keyevent KEYCODE_WAKEUP
+adb shell wm dismiss-keyguard
+# Start the native activity first to confirm the clean installation binds
+# even while Android's WebView provider is still initializing.
 adb shell am start -W -n "$package/.AccessibilityDiagnosticsActivity"
-wait_for 'System enabled the service, and the same app process received an actual window event.' has_connection
+adb shell settings --user current put secure enabled_accessibility_services "$component"
+adb shell settings --user current put secure accessibility_enabled 1
+wait_for_connection 'System enabled the service, and the same app process received an actual window event.'
 pid_before=$(app_pid)
+adb shell am start -W -n "$package/.MainActivity"
 adb shell am start -W -a android.settings.SETTINGS
 adb shell input keyevent KEYCODE_BACK
 sleep 1
@@ -56,11 +86,10 @@ test "$(app_pid)" = "$pid_before"
 has_connection
 
 adb install -r "$apk"
+wait_for_connection 'The existing grant reconnected after an APK replacement and delivered a new window event.'
 adb shell am start -W -n "$package/.MainActivity"
-adb shell am start -W -a android.settings.SETTINGS
-adb shell am start -W -n "$package/.AccessibilityDiagnosticsActivity"
-wait_for 'The existing grant reconnected after an APK replacement and delivered a new window event.' has_connection
+has_connection
 
-adb shell settings delete secure enabled_accessibility_services
-adb shell settings put secure accessibility_enabled 0
+adb shell settings --user current delete secure enabled_accessibility_services
+adb shell settings --user current put secure accessibility_enabled 0
 wait_for 'Android revocation disconnected the service.' has_disconnected
