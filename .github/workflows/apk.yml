@@ -2,12 +2,6 @@ name: Build XiaoAi APK
 on:
   push:
     branches: [main]
-    paths:
-      - 'app/**'
-      - 'tests/**'
-      - 'ci/**'
-      - '*.gradle'
-      - 'gradle.properties'
   workflow_dispatch:
 permissions:
   contents: write
@@ -15,13 +9,61 @@ concurrency:
   group: apk-${{ github.ref }}
   cancel-in-progress: false
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.source.outputs.ready }}
+      revision: ${{ steps.source.outputs.revision }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Import initial source archive if needed
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive=xiaoai-android-source.zip
+          if [ ! -f app/src/main/assets/index.html ] && [ -f "$archive" ]; then
+            test "$GITHUB_REF" = refs/heads/main
+            python3 - <<'PY'
+          from pathlib import Path, PurePosixPath
+          import zipfile, stat
+          allowed = {'app', 'ci', 'tests', 'README.md', 'build.gradle', 'settings.gradle', 'gradle.properties', '.gitignore'}
+          with zipfile.ZipFile('xiaoai-android-source.zip') as z:
+              assert z.testzip() is None, 'corrupt source archive'
+              for member in z.infolist():
+                  p = PurePosixPath(member.filename)
+                  if p.is_absolute() or '..' in p.parts or '\\' in member.filename:
+                      raise ValueError('unsafe archive path')
+                  if stat.S_ISLNK(member.external_attr >> 16):
+                      raise ValueError('symlink not allowed')
+                  if p.parts and p.parts[0] in allowed:
+                      z.extract(member, '.')
+          for required in ['app/src/main/assets/index.html', 'app/build.gradle', 'settings.gradle', 'ci/test-signing.jks', 'tests/phone-bridge.test.cjs']:
+              assert Path(required).is_file(), 'missing ' + required
+          PY
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add app ci tests README.md build.gradle settings.gradle gradle.properties .gitignore
+            git rm -- "$archive"
+            git commit -m "Import XiaoAi Android source project"
+            git push origin HEAD:main
+          fi
+          if [ -f app/src/main/assets/index.html ] && [ -f app/build.gradle ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Upload xiaoai-android-source.zip to the root of main to initialize the Android project." >> "$GITHUB_STEP_SUMMARY"
+          fi
   apk:
+    needs: prepare
+    if: needs.prepare.outputs.ready == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-      - name: Verify source is present
-        run: test -f app/src/main/assets/index.html && test -f app/build.gradle
+        with:
+          ref: ${{ needs.prepare.outputs.revision }}
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -50,6 +92,7 @@ jobs:
         if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
+          REVISION: ${{ needs.prepare.outputs.revision }}
         run: |
           tag="apk-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
-          gh release create "$tag" apk-artifacts/*.apk --target "$GITHUB_SHA" --title "小爱机 APK #${GITHUB_RUN_NUMBER}" --notes "Android 测试版；来源提交 ${GITHUB_SHA}。"
+          gh release create "$tag" apk-artifacts/*.apk --target "$REVISION" --title "小爱机 APK #${GITHUB_RUN_NUMBER}" --notes "Android 测试版；来源提交 ${REVISION}。"
