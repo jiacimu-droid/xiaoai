@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Run only on the clean emulator provisioned by the APK workflow.
+apk=${1:?APK path is required}
+package=com.xiaoai.phone
+component=$package/.PhoneService
+prefs=shared_prefs/accessibility_diagnostics.xml
+
+diagnostics() { adb shell run-as "$package" cat "$prefs" 2>/dev/null; }
+app_pid() { adb shell pidof "$package" | tr -d '\r'; }
+has_connection() {
+    local pid state
+    pid=$(app_pid)
+    test -n "$pid" || return 1
+    state=$(diagnostics) || return 1
+    grep -Eq 'name="stage">(callback|event)<' <<<"$state" &&
+        grep -Fq "name=\"pid\" value=\"$pid\"" <<<"$state" &&
+        grep -Fq 'name="firstEventAt"' <<<"$state"
+}
+has_disconnected() { diagnostics | grep -Eq 'name="stage">(unbind|destroy)<' ; }
+wait_for() {
+    local message=$1
+    shift
+    for _ in {1..25}; do
+        if "$@"; then
+            printf '%s\n' "$message"
+            return 0
+        fi
+        sleep 1
+    done
+    printf 'Timed out: %s\n' "$message" >&2
+    return 1
+}
+on_failure() {
+    local code=$?
+    if [ "$code" -ne 0 ]; then
+        diagnostics || true
+        adb logcat -d -t 1400 | awk '/XiaoAiAccessibility|AndroidRuntime|PhoneService|FATAL EXCEPTION/' | tail -80
+    fi
+}
+trap on_failure EXIT
+
+adb install "$apk"
+adb shell am start -W -n "$package/.MainActivity"
+adb shell settings put secure enabled_accessibility_services "$component"
+adb shell settings put secure accessibility_enabled 1
+adb shell am start -W -a android.settings.SETTINGS
+adb shell am start -W -n "$package/.AccessibilityDiagnosticsActivity"
+wait_for 'System enabled the service, and the same app process received an actual window event.' has_connection
+pid_before=$(app_pid)
+adb shell am start -W -a android.settings.SETTINGS
+adb shell input keyevent KEYCODE_BACK
+sleep 1
+test "$(app_pid)" = "$pid_before"
+has_connection
+
+adb install -r "$apk"
+adb shell am start -W -n "$package/.MainActivity"
+adb shell am start -W -a android.settings.SETTINGS
+adb shell am start -W -n "$package/.AccessibilityDiagnosticsActivity"
+wait_for 'The existing grant reconnected after an APK replacement and delivered a new window event.' has_connection
+
+adb shell settings delete secure enabled_accessibility_services
+adb shell settings put secure accessibility_enabled 0
+wait_for 'Android revocation disconnected the service.' has_disconnected

@@ -52,6 +52,15 @@ test('unavailable bridge status is not displayed as a revoked grant',async()=>{
  assert.deepEqual(calls.map(c=>c.action),['status']);
 });
 test('HTML uses original settings and task bridge',()=>{const h=fs.readFileSync('app/src/main/assets/index.html','utf8');assert.match(h,/id="xaNativeTg"/);assert.match(h,/var XA_ACTS=\[[^\]]*'swipe'/);assert.match(h,/await br\(a,args\)/);assert.match(h,/src="phone-bridge.js"/);});
+test('native diagnostics stays reachable without a working WebView message bridge',()=>{
+ const window={location:{origin:'https://appassets.androidplatform.net'}};
+ let button;
+ const row={insertAdjacentElement(_position,element){button=element;}};
+ const document={readyState:'complete',getElementById:id=>id==='xaNativeRow'?row:null,createElement:()=>({style:{}})};
+ vm.runInNewContext(js,{window,document});
+ assert.equal(button.textContent,'連接診斷');button.onclick();
+ assert.equal(window.location.href,'/accessibility-diagnostics');
+});
 
 function routingEnv({enabled=true,role=true,decision='phone',request='打开我的QQ',guess=true,connectedAfterReads=1}={}){
  const c={id:'role1',msgs:[{role:'u',type:'text',content:request}]}, events=[];

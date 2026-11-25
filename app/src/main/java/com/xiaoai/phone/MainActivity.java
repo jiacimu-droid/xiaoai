@@ -47,7 +47,13 @@ public final class MainActivity extends Activity {
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r){return loader.shouldInterceptRequest(r.getUrl());}
             @Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){
                 if(!r.isForMainFrame())return false;
-                Uri u=r.getUrl(); if(ORIGIN.equals(u.getScheme()+"://"+u.getHost())&&"/assets/index.html".equals(u.getPath()))return false;
+                Uri u=r.getUrl();
+                if(isAppOrigin(u)&&"/accessibility-diagnostics".equals(u.getPath())){
+                    startActivity(new Intent(MainActivity.this,AccessibilityDiagnosticsActivity.class)
+                            .putExtra("page_reported",statusReply!=null));
+                    return true;
+                }
+                if(isAppOrigin(u)&&"/assets/index.html".equals(u.getPath()))return false;
                 if("https".equals(u.getScheme())||"http".equals(u.getScheme()))try{startActivity(new Intent(Intent.ACTION_VIEW,u));}catch(Exception ignored){}
                 return true;
             }
@@ -87,7 +93,7 @@ public final class MainActivity extends Activity {
                     }
                     if(service==null){
                         String why=AccessibilityGrant.isEnabled(this)
-                                ?"系統已授權，無障礙服務未連接"
+                                ?"系統已授權，無障礙服務未連接。可在設置查看「連接診斷」。"
                                 :"請先在系統設置開啟「小愛機 · 手機操作」";
                         respond.accept(PhoneService.result(false,why,""));return;
                     }

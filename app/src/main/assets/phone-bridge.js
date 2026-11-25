@@ -42,7 +42,7 @@ async function refresh(){
 }
 function unavailable(s){
  if(!s.ok)return '暫時無法核對無障礙狀態，請稍後重試。';
- if(s.enabled)return '系統已授權，但無障礙服務還沒連接。點「授權無障礙」可重新打開系統設置。';
+ if(s.enabled)return '系統已授權，但無障礙服務還沒連接。請在設置打開「連接診斷」查看停在哪一步。';
  return '無障礙未授權，請在系統設置開啟「小愛機 · 手機操作」。';
 }
 g.xaNativeRefresh=refresh;
@@ -105,6 +105,23 @@ if(typeof module!=='undefined')module.exports={rpc,refresh};
 function initStatus(){renderStatus(false);refresh();}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initStatus);else initStatus();
 })(typeof window!=='undefined'?window:globalThis);
+
+/* Navigate to native diagnostics even when the WebView message bridge is unavailable. */
+(function(g){
+'use strict';
+if(g.location?.origin!=='https://appassets.androidplatform.net')return;
+function installDiagnostics(){
+ const row=document.getElementById('xaNativeRow');
+ if(!row)return;
+ const button=document.createElement('button');
+ button.type='button';button.className='btn full ghost';button.textContent='連接診斷';
+ button.style.margin='0 0 12px';
+ button.onclick=()=>{g.location.href='/accessibility-diagnostics';};
+ row.insertAdjacentElement('afterend',button);
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',installDiagnostics);
+else installDiagnostics();
+})(window);
 
 /* Real phone requests must not be answered by the virtual-component chat lane. */
 (function(g){

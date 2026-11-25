@@ -149,11 +149,24 @@ final class AppLocks {
     void onWindow(AccessibilityEvent event) {
         int type = event.getEventType();
         if (type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && type != AccessibilityEvent.TYPE_WINDOWS_CHANGED) return;
-        if (Build.VERSION.SDK_INT >= 30 && event.getDisplayId() > Display.DEFAULT_DISPLAY) return;
+        // The event accessor arrived in Android 13. Android 11/12 still enforce
+        // the display boundary through getWindowsOnAllDisplays() in foreground().
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && event.getDisplayId() > Display.DEFAULT_DISPLAY) return;
         if (latestExpiry > System.currentTimeMillis() || cover != null || notice != null) inspect();
     }
 
     void inspect() {
+        try {
+            inspectForeground();
+        } catch (RuntimeException | LinkageError error) {
+            AccessibilityDiagnostics.fault(service, "检查应用锁前台", error);
+            close();
+            // Window changes or a new task can retry. Clear the cover immediately.
+        }
+    }
+
+    private void inspectForeground() {
         handler.removeCallbacks(watchdog);
         long remaining = latestExpiry - System.currentTimeMillis();
         if (remaining <= 0 || PhoneService.instance != service) {

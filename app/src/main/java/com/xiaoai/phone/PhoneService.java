@@ -32,30 +32,68 @@ public final class PhoneService extends AccessibilityService {
     private int draftWindow=-1;
     private boolean submitted=false;
     private AppLocks appLocks;
+    private boolean acceptsEvents;
+    private boolean firstEvent;
     static JSONObject json(Object... kv){JSONObject o=new JSONObject();try{for(int i=0;i<kv.length;i+=2)o.put((String)kv[i],kv[i+1]);}catch(Exception ignored){}return o;}
     static JSONObject result(boolean ok,String why,String screen){return json("ok",ok,"why",why,"screen",screen);}
     static void addConnectionListener(Runnable listener) { CONNECTION_LISTENERS.add(listener); }
     static void removeConnectionListener(Runnable listener) { CONNECTION_LISTENERS.remove(listener); }
-    private static void notifyConnection() { for (Runnable listener : CONNECTION_LISTENERS) listener.run(); }
+    private void notifyConnection() {
+        for (Runnable listener : CONNECTION_LISTENERS) {
+            try { listener.run(); }
+            catch (RuntimeException error) { AccessibilityDiagnostics.fault(this,"通知连接状态",error); }
+        }
+    }
+    @Override public void onCreate(){
+        super.onCreate();
+        acceptsEvents=true;
+        AccessibilityDiagnostics.created(this);
+    }
     @Override protected void onServiceConnected(){
         super.onServiceConnected();
-        if(appLocks!=null)appLocks.close();
-        appLocks=new AppLocks(this);
+        acceptsEvents=true;
+        connected("callback");
+    }
+    private void connected(String evidence){
+        AccessibilityDiagnostics.stage(this,evidence);
+        if(instance==this)return;
+        try {
+            appLocks=new AppLocks(this);
+        } catch (RuntimeException | LinkageError error) {
+            AccessibilityDiagnostics.fault(this,"初始化应用锁",error);
+        }
         instance=this;
         notifyConnection();
-        appLocks.inspect();
+        if(appLocks!=null)appLocks.inspect();
     }
-    @Override public void onAccessibilityEvent(AccessibilityEvent e){if(appLocks!=null&&e!=null)appLocks.onWindow(e);}
+    @Override public void onAccessibilityEvent(AccessibilityEvent e){
+        if(!acceptsEvents||e==null||(instance!=null&&instance!=this))return;
+        // A real system-delivered event proves this instance is reachable even
+        // on devices where it arrives before the connection callback.
+        if(instance==null)connected("event");
+        if(!firstEvent){firstEvent=true;AccessibilityDiagnostics.firstEvent(this);}
+        if(appLocks!=null){
+            try { appLocks.onWindow(e); }
+            catch (RuntimeException | LinkageError error) {
+                AccessibilityDiagnostics.fault(this,"處理無障礙窗口事件",error);
+                appLocks.close();
+            }
+        }
+    }
     @Override public void onInterrupt(){cancel();}
-    @Override public boolean onUnbind(Intent i){disconnect();return super.onUnbind(i);}
-    @Override public void onDestroy(){disconnect();super.onDestroy();}
-    private void disconnect(){
+    @Override public boolean onUnbind(Intent i){disconnect("unbind");return super.onUnbind(i);}
+    @Override public void onDestroy(){disconnect("destroy");super.onDestroy();}
+    private void disconnect(String reason){
+        boolean wasActive=acceptsEvents;
+        acceptsEvents=false;
+        firstEvent=false;
         cancel();
-        if(appLocks!=null)appLocks.close();
+        if(appLocks!=null){appLocks.close();appLocks=null;}
+        if(wasActive&&(instance==null||instance==this))AccessibilityDiagnostics.stage(this,reason);
         if(instance==this){instance=null;notifyConnection();}
     }
     void cancel(){generation++;allowed="";until=0;observedAt=0;busy=false;clearDraft();submitted=false;}
-    void revoke(){if(appLocks!=null)appLocks.command(json("action","clear_app_locks"));disconnect();disableSelf();}
+    void revoke(){if(appLocks!=null)appLocks.command(json("action","clear_app_locks"));disconnect("disabled");disableSelf();}
     JSONObject appLockCommand(JSONObject command){return appLocks==null?result(false,"无障碍服务尚未连接",""):appLocks.command(command);}
     private void clearDraft(){draft="";draftWindow=-1;}
     static final class Target {final String pkg,label;Target(String p,String l){pkg=p;label=l;}}
