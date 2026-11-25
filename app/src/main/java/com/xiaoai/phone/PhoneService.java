@@ -15,24 +15,30 @@ import android.view.WindowManager;
 import android.util.DisplayMetrics;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityWindowInfo;
 import org.json.JSONObject;
 import java.util.*;
 import java.util.function.Consumer;
 
-/** Foreground-only, user-approved target. No persistent screen collection. */
+/** Operates on the foreground application selected by the active phone task. */
 public final class PhoneService extends AccessibilityService {
     static volatile PhoneService instance;
     private final Handler h=new Handler(Looper.getMainLooper());
     private String allowed=""; private long until=0, generation=0, observedAt=0;
     private boolean busy=false;
+    private String draft="";
+    private int draftWindow=-1;
+    private boolean submitted=false;
     static JSONObject json(Object... kv){JSONObject o=new JSONObject();try{for(int i=0;i<kv.length;i+=2)o.put((String)kv[i],kv[i+1]);}catch(Exception ignored){}return o;}
     static JSONObject result(boolean ok,String why,String screen){return json("ok",ok,"why",why,"screen",screen);}
     @Override protected void onServiceConnected(){instance=this;}
     @Override public void onAccessibilityEvent(AccessibilityEvent e){}
     @Override public void onInterrupt(){cancel();}
-    @Override public boolean onUnbind(Intent i){cancel();instance=null;MainActivity.enabled=false;return super.onUnbind(i);}
-    @Override public void onDestroy(){cancel();if(instance==this)instance=null;MainActivity.enabled=false;super.onDestroy();}
-    void cancel(){generation++;allowed="";until=0;observedAt=0;busy=false;}
+    @Override public boolean onUnbind(Intent i){cancel();if(instance==this)instance=null;return super.onUnbind(i);}
+    @Override public void onDestroy(){cancel();if(instance==this)instance=null;super.onDestroy();}
+    void cancel(){generation++;allowed="";until=0;observedAt=0;busy=false;clearDraft();submitted=false;}
+    void revoke(){cancel();if(instance==this)instance=null;disableSelf();}
+    private void clearDraft(){draft="";draftWindow=-1;}
     static final class Target {final String pkg,label;Target(String p,String l){pkg=p;label=l;}}
     private boolean blockedPackage(String p){return p==null||p.isEmpty()||p.equals(getPackageName())||p.startsWith("com.android.")||p.startsWith("com.google.android.permissioncontroller")||p.contains("bank")||p.contains("alipay")||p.contains("wallet")||p.contains("password")||p.contains("authenticator");}
     Target resolve(String name){
@@ -46,7 +52,8 @@ public final class PhoneService extends AccessibilityService {
         }return found;
     }
     void launch(Target t,Consumer<JSONObject> cb){
-        cancel();if(!MainActivity.enabled||locked()){cb.accept(result(false,"無障礙已關閉或手機已鎖定",""));return;}
+        if(busy){cb.accept(result(false,"另一動作尚未結束", ""));return;}
+        cancel();if(instance!=this||locked()){cb.accept(result(false,"無障礙已關閉或手機已鎖定",""));return;}
         Intent i=getPackageManager().getLaunchIntentForPackage(t.pkg);if(i==null){cb.accept(result(false,"無法開啟 App",""));return;}
         allowed=t.pkg;until=SystemClock.elapsedRealtime()+180000;long g=generation;busy=true;
         try{startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));}catch(Exception e){cancel();cb.accept(result(false,"Android 拒絕啟動",""));return;}
@@ -55,14 +62,31 @@ public final class PhoneService extends AccessibilityService {
     private void waitForLaunch(long g,Consumer<JSONObject> cb,int attempt){
         if(g!=generation){cb.accept(result(false,"任务已停止",""));return;}
         if(root()!=null){finish(g,cb,true,"已观察到目标 App");return;}
-        if(attempt>=12){finish(g,cb,false,"未观察到目标 App，请检查手机前台");return;}
+        if(attempt>=20){busy=false;cb.accept(result(false,"未观察到目标 App，请检查是否已登录或被系统弹窗挡住",""));return;}
         h.postDelayed(()->waitForLaunch(g,cb,attempt+1),500);
     }
     private boolean locked(){KeyguardManager k=getSystemService(KeyguardManager.class);return k!=null&&k.isDeviceLocked();}
+    boolean hasTargetOnScreen(){return !allowed.isEmpty()&&foregroundTarget()!=null;}
+    private AccessibilityNodeInfo foregroundTarget(){
+        AccessibilityNodeInfo active=getRootInActiveWindow();
+        if(belongsToTarget(active))return active;
+        List<AccessibilityWindowInfo> windows=getWindows();
+        boolean keyboardActive=false;
+        for(AccessibilityWindowInfo w:windows){
+            if(w.getType()==AccessibilityWindowInfo.TYPE_INPUT_METHOD&&w.isActive())keyboardActive=true;
+        }
+        if(!keyboardActive)return null;
+        for(AccessibilityWindowInfo w:windows){
+            if(w.getType()!=AccessibilityWindowInfo.TYPE_APPLICATION||!w.isFocused())continue;
+            AccessibilityNodeInfo r=w.getRoot();
+            if(belongsToTarget(r))return r;
+        }
+        return null;
+    }
+    private boolean belongsToTarget(AccessibilityNodeInfo n){return n!=null&&n.getPackageName()!=null&&allowed.contentEquals(n.getPackageName());}
     private AccessibilityNodeInfo root(){
-        if(!MainActivity.enabled||locked()||SystemClock.elapsedRealtime()>until||allowed.isEmpty())return null;
-        AccessibilityNodeInfo r=getRootInActiveWindow();if(r==null)return null;
-        if(r.getPackageName()==null||!allowed.contentEquals(r.getPackageName()))return null;
+        if(instance!=this||locked()||SystemClock.elapsedRealtime()>until||allowed.isEmpty())return null;
+        AccessibilityNodeInfo r=foregroundTarget();if(r==null)return null;
         if(sensitive(r,0,new int[]{0}))return null;
         return r;
     }
@@ -85,7 +109,7 @@ public final class PhoneService extends AccessibilityService {
         }
         for(int j=0;j<n.getChildCount();j++)dump(n.getChild(j),b,depth+1,count);
     }
-    private String observe(AccessibilityNodeInfo r){StringBuilder b=new StringBuilder();dump(r,b,0,new int[]{0});observedAt=SystemClock.elapsedRealtime();return "前台应用："+allowed+"；屏幕："+screenMetrics().widthPixels+"×"+screenMetrics().heightPixels+"；"+(b.length()==0?"没有可读控件；不要猜坐标":b.substring(0,Math.min(3500,b.length())));}
+    private String observe(AccessibilityNodeInfo r){StringBuilder b=new StringBuilder();dump(r,b,0,new int[]{0});observedAt=SystemClock.elapsedRealtime();until=observedAt+180000;return "前台应用："+allowed+"；屏幕："+screenMetrics().widthPixels+"×"+screenMetrics().heightPixels+"；"+(b.length()==0?"没有可读控件；不要猜坐标":b.substring(0,Math.min(3500,b.length())));}
     private void finish(long g,Consumer<JSONObject> cb,boolean accepted,String why){
         if(g!=generation){cb.accept(result(false,"任務已停止", ""));return;}busy=false;AccessibilityNodeInfo r=root();
         if(r==null){observedAt=0;cb.accept(result(false,"目標畫面未確認、已離開授權 App 或受保護；不要盲目重試", ""));return;}
@@ -125,19 +149,74 @@ public final class PhoneService extends AccessibilityService {
         }catch(Exception e){busy=false;cb.accept(result(false,"窗口截图不可用："+e.getMessage(),observe(r)));}
     }
     private static double coord(JSONObject a,String k){double v=a.optDouble(k,Double.NaN);if(!Double.isFinite(v)||v<0||v>1)throw new IllegalArgumentException("座標須在 0~1");return v;}
-    private boolean risky(String s){return s!=null&&s.matches("(?is).*(發送|发送|付款|支付|下單|下单|轉帳|转账|刪除|删除|確認購買|确认购买|send|purchase|pay now|delete).*" );}
+    private boolean risky(String s){return s!=null&&s.trim().matches("(?i)(發送|发送|送出|发表|發表|发布|發布|付款|支付|下單|下单|轉帳|转账|刪除|删除|確認購買|确认购买|send|post|purchase|pay now|delete)");}
     private AccessibilityNodeInfo exact(AccessibilityNodeInfo r,String s){
         List<AccessibilityNodeInfo> matches=r.findAccessibilityNodeInfosByText(s);AccessibilityNodeInfo found=null;
         for(AccessibilityNodeInfo n:matches){if(!n.isVisibleToUser())continue;String t=String.valueOf(n.getText()),d=String.valueOf(n.getContentDescription());if(!s.equals(t)&&!s.equals(d))continue;if(found!=null)return null;found=n;}return found;
     }
     private boolean click(AccessibilityNodeInfo n){for(int i=0;n!=null&&i<6;i++,n=n.getParent()){if(n.isClickable()&&n.isEnabled())return n.performAction(AccessibilityNodeInfo.ACTION_CLICK);}return false;}
-    private boolean dangerousAt(AccessibilityNodeInfo n,int x,int y,int d){if(n==null||d>30)return false;Rect b=new Rect();n.getBoundsInScreen(b);if(!b.contains(x,y))return false;if(risky(String.valueOf(n.getText())+" "+String.valueOf(n.getContentDescription())))return true;for(int j=0;j<n.getChildCount();j++)if(dangerousAt(n.getChild(j),x,y,d+1))return true;return false;}
+    private boolean dangerousAt(AccessibilityNodeInfo n,int x,int y,int d){if(n==null||d>30)return false;Rect b=new Rect();n.getBoundsInScreen(b);if(!b.contains(x,y))return false;if(risky(String.valueOf(n.getText()))||risky(String.valueOf(n.getContentDescription())))return true;for(int j=0;j<n.getChildCount();j++)if(dangerousAt(n.getChild(j),x,y,d+1))return true;return false;}
+    private AccessibilityNodeInfo input(AccessibilityNodeInfo r){
+        AccessibilityNodeInfo f=r.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+        return f!=null&&f.isVisibleToUser()&&f.isEnabled()&&f.isEditable()&&!f.isPassword()?f:null;
+    }
+    private boolean hasText(AccessibilityNodeInfo n,String text){return n!=null&&n.getText()!=null&&text.contentEquals(n.getText());}
+    private int visibleMessages(AccessibilityNodeInfo r,String text){
+        int count=0;
+        for(AccessibilityNodeInfo n:r.findAccessibilityNodeInfosByText(text)){
+            if(n.isVisibleToUser()&&!n.isEditable()&&hasText(n,text))count++;
+        }
+        return count;
+    }
+    private void submitSocial(AccessibilityNodeInfo r,JSONObject a,Consumer<JSONObject> cb){
+        boolean moments="publish_moments".equals(a.optString("action"));
+        boolean wechat="com.tencent.mm".equals(allowed);
+        if(!wechat&&(moments||!"com.tencent.mobileqq".equals(allowed))){
+            cb.accept(result(false,"此应用没有匹配的消息或朋友圈发布入口",observe(r)));return;
+        }
+        if(submitted){cb.accept(result(false,"已经点过发送或发布，请查看结果，避免重复提交",observe(r)));return;}
+        if(draft.isEmpty()||draftWindow!=r.getWindowId()||!hasText(input(r),draft)){
+            cb.accept(result(false,"当前输入框里没有刚核对过的草稿，请重新定位并输入",observe(r)));return;
+        }
+        if(!moments){
+            String recipient=a.optString("recipient").trim();
+            AccessibilityNodeInfo title=recipient.isEmpty()?null:exact(r,recipient);
+            Rect screen=new Rect(), bounds=new Rect();r.getBoundsInScreen(screen);
+            if(title!=null)title.getBoundsInScreen(bounds);
+            if(title==null||bounds.isEmpty()||bounds.centerY()>screen.top+screen.height()/4){
+                cb.accept(result(false,"聊天标题与指定收件人未匹配，请重新核对当前会话",observe(r)));return;
+            }
+        }
+        String label=a.optString("label").trim();
+        String labels=moments?"(?i)(发表|發表|发布|發布|Post)":"(?i)(发送|發送|送出|Send)";
+        AccessibilityNodeInfo button=label.matches(labels)?exact(r,label):null;
+        if(button==null){cb.accept(result(false,"当前页面没有唯一对应的发送或发布按钮",observe(r)));return;}
+        String text=draft;
+        int before=visibleMessages(r,text);
+        long g=generation;
+        if(!click(button)){cb.accept(result(false,"Android 未接受当前按钮的点击，请重新观察",observe(r)));return;}
+        submitted=true;busy=true;clearDraft();
+        h.postDelayed(()->verifySubmission(g,moments,text,label,before,0,cb),400);
+    }
+    private void verifySubmission(long g,boolean moments,String text,String label,int before,int attempt,Consumer<JSONObject> cb){
+        if(g!=generation){cb.accept(result(false,"任务已停止", ""));return;}
+        AccessibilityNodeInfo r=root();
+        boolean verified=r!=null&&!hasText(input(r),text)&&visibleMessages(r,text)>before&&(!moments||exact(r,label)==null);
+        if(!verified&&attempt<12){
+            h.postDelayed(()->verifySubmission(g,moments,text,label,before,attempt+1,cb),450);return;
+        }
+        busy=false;
+        cb.accept(json("ok",verified,"submitted",true,"verified",verified,
+                "why",verified?(moments?"已在朋友圈看到刚发布的内容":"已在会话中看到刚发出的消息"):"已点击提交，应用未显示可核实的结果，请先查看，避免重复发送",
+                "screen",r==null?"":observe(r)));
+    }
     void request(JSONObject a,Consumer<JSONObject> cb){
         if(busy){cb.accept(result(false,"另一動作尚未結束", ""));return;}
         AccessibilityNodeInfo r=root();if(r==null){cb.accept(result(false,"請先開啟並授權目標 App；受保護或非目標畫面不可操作", ""));return;}
         String action=a.optString("action");if(action.equals("screenshot")||action.equals("inspect")){cb.accept(result(true,"已读取当前控件树",observe(r)));return;}
         if(action.equals("capture_window")){captureWindow(r,cb);return;}
         if(SystemClock.elapsedRealtime()-observedAt>60000||observedAt==0){cb.accept(result(false,"畫面已過期，請重新觀察", ""));return;}
+        if(action.equals("send_message")||action.equals("publish_moments")){submitSocial(r,a,cb);return;}
         boolean ok=false;String why="Android 已接受動作";long g=generation;busy=true;
         try{
             switch(action){
@@ -155,12 +234,12 @@ public final class PhoneService extends AccessibilityService {
                         }
                     }
                     break;}
-                case "type_text": {String t=a.optString("text");AccessibilityNodeInfo f=r.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);if(f==null||!f.isEditable()||f.isPassword()||t.isEmpty()||t.length()>500)throw new IllegalArgumentException("找不到安全的已聚焦輸入框，或文字過長");Bundle b=new Bundle();b.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,t);ok=f.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,b);
+                case "type_text": {clearDraft();String t=a.optString("text");AccessibilityNodeInfo f=input(r);if(f==null||t.isEmpty()||t.length()>800)throw new IllegalArgumentException("找不到已聚焦的输入框，或文字过长");Bundle b=new Bundle();b.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,t);ok=f.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,b);
                     if(ok){h.postDelayed(()->{
                         if(g!=generation){cb.accept(result(false,"任务已停止",""));return;}
                         AccessibilityNodeInfo updated=root();
-                        AccessibilityNodeInfo focus=updated==null?null:updated.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
-                        boolean verified=focus!=null&&!focus.isPassword()&&t.contentEquals(focus.getText()==null?"":focus.getText());
+                        boolean verified=updated!=null&&hasText(input(updated),t);
+                        if(verified){draft=t;draftWindow=updated.getWindowId();}
                         finish(g,cb,verified,verified?"已观察到输入框文字与请求一致":"输入请求已接受，但未确认文字，请重新定位输入框");
                     },450);return;}
                     break;}

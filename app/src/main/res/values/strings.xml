@@ -1,1 +1,1 @@
-<resources><string name="accessibility_description">允許角色操作經你確認的 App，讀取可見控制項、點擊、滑動及輸入。可隨時關閉。</string></resources>
+<resources><string name="accessibility_description">允許角色按你的指令操作前台 App，包括讀取畫面、輸入、發送訊息及發佈朋友圈。執行需要的可見內容可能傳送到你設定的模型。可隨時關閉。</string></resources>
