@@ -25,3 +25,21 @@ test('virtual component chat stays in the normal chat lane',async()=>{
  const {g,c,events}=routingEnv({decision:'chat'});g.xaTaskEntry(c,'打开虚拟QQ');g.scheduleAutoReply(c);await settle();
  assert.deepEqual(events,['chat']);
 });
+
+function executionEnv(){
+ const c={id:'role1',msgs:[]}, calls=[];
+ const g={PhoneNative:{postMessage(raw){const m=JSON.parse(raw);calls.push(m.command.action);queueMicrotask(()=>this.onmessage({data:JSON.stringify({id:m.id,result:m.command.action==='status'?{ok:true,enabled:true,connected:true}:{ok:true,screen:'fresh screen',image:'data:image/jpeg;base64,AAAA'}})}));}},xaLoop(){},xaExec(t,c,st){calls.push(st.action);return 'break';},xaTaskSys(){return 'task';},xaTaskAsk(){return 'goal';}};
+ vm.runInNewContext(js,{window:g,document:{readyState:'loading',addEventListener(){},getElementById(){return null}},setTimeout,clearTimeout,Map,JSON,xaStopped:()=>false,xaTaskOn:()=>true,XA_ACTS:['open_app','screenshot','tap_text']});
+ return {g,c,calls};
+}
+test('completion without action evidence is rejected before calling legacy executor',async()=>{
+ const {g,c,calls}=executionEnv(), t={steps:[],state:'run'};
+ assert.equal(await g.xaExec(t,c,{action:'done',args:{}}),'go');
+ assert.equal(t.steps[0].a,'done_rejected');assert.deepEqual(calls,[]);
+});
+test('capture returns observation but does not persist image bytes in task history',async()=>{
+ const {g,c,calls}=executionEnv(), t={steps:[],state:'run'};
+ assert.equal(await g.xaExec(t,c,{action:'capture_window',args:{}}),'go');
+ assert.deepEqual(calls,['status','capture_window']);assert.equal(t.steps[0].screen,'fresh screen');assert.equal(t.steps[0].ok,true);
+ assert.ok(!JSON.stringify(t).includes('data:image'));
+});
