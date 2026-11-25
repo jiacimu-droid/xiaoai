@@ -50,7 +50,13 @@ public final class PhoneService extends AccessibilityService {
         Intent i=getPackageManager().getLaunchIntentForPackage(t.pkg);if(i==null){cb.accept(result(false,"無法開啟 App",""));return;}
         allowed=t.pkg;until=SystemClock.elapsedRealtime()+180000;long g=generation;busy=true;
         try{startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));}catch(Exception e){cancel();cb.accept(result(false,"Android 拒絕啟動",""));return;}
-        h.postDelayed(()->finish(g,cb,true,"已觀察到目標 App"),1500);
+        h.postDelayed(()->waitForLaunch(g,cb,0),500);
+    }
+    private void waitForLaunch(long g,Consumer<JSONObject> cb,int attempt){
+        if(g!=generation){cb.accept(result(false,"任务已停止",""));return;}
+        if(root()!=null){finish(g,cb,true,"已观察到目标 App");return;}
+        if(attempt>=12){finish(g,cb,false,"未观察到目标 App，请检查手机前台");return;}
+        h.postDelayed(()->waitForLaunch(g,cb,attempt+1),500);
     }
     private boolean locked(){KeyguardManager k=getSystemService(KeyguardManager.class);return k!=null&&k.isDeviceLocked();}
     private AccessibilityNodeInfo root(){
@@ -72,8 +78,10 @@ public final class PhoneService extends AccessibilityService {
         if(n==null||depth>25||++count[0]>400||b.length()>1150)return;
         if(n.isVisibleToUser()&&!n.isPassword()){
             String t=n.getText()!=null?n.getText().toString():n.getContentDescription()!=null?n.getContentDescription().toString():"";
+            if(t.trim().isEmpty()&&n.isEditable()&&n.getHintText()!=null)t=n.getHintText().toString();
+            if(t.trim().isEmpty()&&(n.isEditable()||n.isClickable()))t=n.getViewIdResourceName()!=null?n.getViewIdResourceName():String.valueOf(n.getClassName());
             if(!t.trim().isEmpty()){Rect r=new Rect();n.getBoundsInScreen(r);DisplayMetrics m=screenMetrics();int w=m.widthPixels,ht=m.heightPixels;
-                b.append(t.replaceAll("[\\r\\n]+"," ").substring(0,Math.min(120,t.replaceAll("[\\r\\n]+"," ").length()))).append(String.format(Locale.ROOT," (%.2f,%.2f)%s; ",r.exactCenterX()/Math.max(1,w),r.exactCenterY()/Math.max(1,ht),n.isEditable()?"[輸入框]":""));}
+                b.append(t.replaceAll("[\\r\\n]+"," ").substring(0,Math.min(120,t.replaceAll("[\\r\\n]+"," ").length()))).append(String.format(Locale.ROOT," (%.2f,%.2f)%s; ",r.exactCenterX()/Math.max(1,w),r.exactCenterY()/Math.max(1,ht),n.isEditable()?"[输入框]":n.isClickable()?"[可点击]":""));}
         }
         for(int j=0;j<n.getChildCount();j++)dump(n.getChild(j),b,depth+1,count);
     }
