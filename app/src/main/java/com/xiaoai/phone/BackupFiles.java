@@ -61,7 +61,7 @@ final class BackupFiles {
                         out.close();out=null;
                         Intent save=new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
                             .setType("application/json").putExtra(Intent.EXTRA_TITLE,filename);
-                        choosing=true;activity.startActivityForResult(save,SAVE);
+                        activity.startActivityForResult(save,SAVE);choosing=true;
                         break;
                     case "cancel": if(!choosing)clear();break;
                     default: throw new IOException("未知备份操作");

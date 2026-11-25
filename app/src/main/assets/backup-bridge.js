@@ -57,7 +57,9 @@ g.importData=function(input){
    const data=decode(rd.result);
    g.__importBuf=data;
    const n=Array.isArray(data.chars)?data.chars.length:0;
-   modal('<div class="mhd">导入数据</div><div style="font-size:12px;line-height:1.8">文件：'+esc(file.name)+'<br>角色：'+n+' · 共 '+Object.keys(data).length+' 项<br>导入将覆盖备份中包含的数据，建议先备份当前数据。</div><div style="display:flex;gap:8px;margin-top:16px"><button class="btn ghost" style="flex:1" onclick="closeModal()">取消</button><button class="btn full" style="flex:1" onclick="doImport()">确认导入</button></div>');
+   const hasExternalRefs=JSON.stringify(data).includes('@@idb@@');
+   const warning=hasExternalRefs?'<br>旧备份含外部图片引用，未随文件导出的媒体无法恢复。':'';
+   modal('<div class="mhd">导入数据</div><div style="font-size:12px;line-height:1.8">文件：'+esc(file.name)+'<br>角色：'+n+' · 共 '+Object.keys(data).length+' 项<br>导入将覆盖备份中包含的数据，建议先备份当前数据。'+warning+'</div><div style="display:flex;gap:8px;margin-top:16px"><button class="btn ghost" style="flex:1" onclick="closeModal()">取消</button><button class="btn full" style="flex:1" onclick="doImport()">确认导入</button></div>');
   }catch(e){toast('导入失败：'+e.message);}finally{input.value='';}
  };
  try{rd.readAsText(file,'UTF-8');}catch(e){rd.onerror();}
