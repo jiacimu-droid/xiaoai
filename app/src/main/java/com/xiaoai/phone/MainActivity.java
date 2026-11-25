@@ -24,6 +24,8 @@ public final class MainActivity extends Activity {
     private BackupFiles backupFiles;
     private JavaScriptReplyProxy statusReply;
     private long statusRevision;
+    private final Handler statusHandler=new Handler(Looper.getMainLooper());
+    private final Runnable refreshStatus=()->{if(resumed)publishStatus();};
     private final Runnable connectionListener=this::publishStatus;
     private final ContentObserver grantObserver=new ContentObserver(new Handler(Looper.getMainLooper())){
         @Override public void onChange(boolean selfChange){publishStatus();}
@@ -136,11 +138,18 @@ public final class MainActivity extends Activity {
         try{statusReply.postMessage(PhoneService.json("event","accessibility_status","result",status()).toString());}
         catch(IllegalStateException ignored){statusReply=null;}
     }
-    @Override protected void onResume(){super.onResume();resumed=true;publishStatus();}
-    @Override protected void onPause(){resumed=false;super.onPause();}
+    @Override protected void onResume(){
+        super.onResume();resumed=true;publishStatus();
+        // Huawei's permission UI may return before the service binding finishes.
+        // Recheck briefly; never treat a settings grant as a real connection.
+        statusHandler.removeCallbacks(refreshStatus);
+        for(long delay:new long[]{250,750,1500,3000,6000})statusHandler.postDelayed(refreshStatus,delay);
+    }
+    @Override protected void onPause(){resumed=false;statusHandler.removeCallbacks(refreshStatus);super.onPause();}
     @Override protected void onActivityResult(int r,int c,Intent d){super.onActivityResult(r,c,d);if(backupFiles!=null&&backupFiles.onResult(r,c,d))return;if(r==42&&chooser!=null){chooser.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(c,d));chooser=null;}}
     @Override public void onBackPressed(){if(web.canGoBack())web.goBack();else super.onBackPressed();}
     @Override protected void onDestroy(){
+        statusHandler.removeCallbacks(refreshStatus);
         PhoneService.removeConnectionListener(connectionListener);
         getContentResolver().unregisterContentObserver(grantObserver);
         statusReply=null;

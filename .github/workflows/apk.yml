@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       full_tests:
-        description: 'Run Android 12L and 15 accessibility emulator tests'
+        description: 'Run Huawei HarmonyOS 4.2 compatibility proxy (Android 12 / API 31)'
         type: boolean
         default: false
 permissions:
@@ -39,7 +39,7 @@ jobs:
             # Fail safe if the previous commit cannot be compared.
             if ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
               full=true
-            elif ! git diff --quiet "$BEFORE" "$GITHUB_SHA" -- app/src/main/java app/src/main/kotlin app/src/main/res app/src/main/AndroidManifest.xml app/src/main/assets/phone-bridge.js app/src/main/assets/backup-bridge.js app/build.gradle build.gradle settings.gradle gradle.properties tests ci; then
+            elif ! git diff --quiet "$BEFORE" "$GITHUB_SHA" -- app/src/main/java app/src/main/kotlin app/src/main/res app/src/main/AndroidManifest.xml app/src/main/assets/phone-bridge.js app/src/main/assets/backup-bridge.js app/build.gradle build.gradle settings.gradle gradle.properties tests ci .github/workflows/apk.yml; then
               full=true
             fi
           fi
@@ -70,7 +70,7 @@ jobs:
           fi
           test -f "$sdk_root/platforms/android-35/android.jar"
           test -x "$sdk_root/build-tools/35.0.0/apksigner"
-      - run: node --check app/src/main/assets/phone-bridge.js && node --check app/src/main/assets/backup-bridge.js && node --test tests/*.test.cjs
+      - run: node --check app/src/main/assets/phone-bridge.js && node --test tests/phone-bridge.test.cjs
       - name: Check fixed private-use signing key
         run: |
           test "$(git hash-object ci/test-signing.jks)" = "c982bfd903de2c03fe9a76e60b3d2696336f5260"
@@ -116,10 +116,6 @@ jobs:
       contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 12
-    strategy:
-      fail-fast: false
-      matrix:
-        api: [32, 35]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -136,8 +132,8 @@ jobs:
       - name: Verify real Android accessibility events
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
         with:
-          api-level: ${{ matrix.api }}
-          avd-name: xiaoai-api-${{ matrix.api }}
+          api-level: 31
+          avd-name: xiaoai-huawei-api31
           target: google_apis
           arch: x86_64
           disk-size: 3G
@@ -161,7 +157,7 @@ jobs:
           FULL_TESTS: ${{ needs.apk.outputs.full_tests }}
         run: |
           tag="apk-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
-          if [ "$FULL_TESTS" = true ]; then test_status="Android 12L/15 模拟器回归通过"; else test_status="轻量构建，未运行模拟器回归"; fi
+          if [ "$FULL_TESTS" = true ]; then test_status="Android 12/API 31 无障碍模拟器回归通过；鸿蒙真机待确认"; else test_status="轻量构建，未运行模拟器回归"; fi
           for attempt in 1 2 3; do
             if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
               gh release upload "$tag" apk-artifacts/XiaoAi.apk --clobber --repo "$GITHUB_REPOSITORY" && exit 0

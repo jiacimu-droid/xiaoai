@@ -100,6 +100,16 @@ final class AccessibilityDiagnostics {
                 .append("首次收到系統事件：").append(time(saved.getLong("firstEventAt",0))).append('\n')
                 .append("網頁原生橋接：").append(webBridgeSupported ? "受支持" : "不受支持")
                 .append(pageReported ? "，頁面已查詢狀態" : "，本次未觀察到頁面查詢");
+        report.append("\n本次進程是否為最近服務進程：").append(yesNo(saved.getInt("pid",-1)==Process.myPid()));
+        try {
+            PackageInfo webView=android.webkit.WebView.getCurrentWebViewPackage();
+            report.append("\nWebView：").append(webView==null?"未知":webView.packageName+" "+webView.versionName);
+        } catch(RuntimeException | LinkageError ignored) {}
+        if ("HUAWEI".equalsIgnoreCase(Build.MANUFACTURER)) {
+            android.os.PowerManager power=context.getSystemService(android.os.PowerManager.class);
+            if(power!=null)report.append("\n電池優化豁免：").append(yesNo(power.isIgnoringBatteryOptimizations(context.getPackageName())));
+            report.append("\n華為/鴻蒙提示：若系統已授權但服務未連接或被清理，請在設置搜尋「應用啟動管理」，找到小愛機，關閉自動管理，允許自啟動、關聯啟動、後台活動。之後返回無障礙確認服務開關。此操作不等於已連接。");
+        }
         String error = saved.getString("fault", "");
         String lock = saved.getString("lockStage", "");
         if (!lock.isEmpty()) report.append("\n最近應用鎖階段：").append(lock).append(" · ").append(time(saved.getLong("lockStageAt", 0)));

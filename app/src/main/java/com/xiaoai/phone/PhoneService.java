@@ -57,14 +57,17 @@ public final class PhoneService extends AccessibilityService {
     private void connected(String evidence){
         AccessibilityDiagnostics.stage(this,evidence);
         if(instance==this)return;
-        try {
-            appLocks=new AppLocks(this);
-        } catch (RuntimeException | LinkageError error) {
-            AccessibilityDiagnostics.fault(this,"初始化应用锁",error);
-        }
+        // Publish the actual system callback before optional lock initialization.
+        // A vendor-specific failure in lock inspection must not break the service.
         instance=this;
         notifyConnection();
-        if(appLocks!=null)appLocks.inspect();
+        try {
+            appLocks=new AppLocks(this);
+            appLocks.inspect();
+        } catch (RuntimeException | LinkageError error) {
+            AccessibilityDiagnostics.fault(this,"初始化应用锁",error);
+            closeLocksSafely();
+        }
     }
     @Override public void onAccessibilityEvent(AccessibilityEvent e){
         if(!acceptsEvents||e==null||(instance!=null&&instance!=this))return;
@@ -76,7 +79,7 @@ public final class PhoneService extends AccessibilityService {
             try { appLocks.onWindow(e); }
             catch (RuntimeException | LinkageError error) {
                 AccessibilityDiagnostics.fault(this,"處理無障礙窗口事件",error);
-                appLocks.close();
+                closeLocksSafely();
             }
         }
     }
@@ -88,9 +91,18 @@ public final class PhoneService extends AccessibilityService {
         acceptsEvents=false;
         firstEvent=false;
         cancel();
-        if(appLocks!=null){appLocks.close();appLocks=null;}
+        closeLocksSafely();
         if(wasActive&&(instance==null||instance==this))AccessibilityDiagnostics.stage(this,reason);
         if(instance==this){instance=null;notifyConnection();}
+    }
+    private void closeLocksSafely(){
+        AppLocks locks=appLocks;
+        appLocks=null;
+        if(locks==null)return;
+        try{locks.close();}
+        catch(RuntimeException | LinkageError error){
+            AccessibilityDiagnostics.fault(this,"關閉應用鎖",error);
+        }
     }
     void cancel(){generation++;allowed="";until=0;observedAt=0;busy=false;clearDraft();submitted=false;}
     void revoke(){if(appLocks!=null)appLocks.command(json("action","clear_app_locks"));disconnect("disabled");disableSelf();}

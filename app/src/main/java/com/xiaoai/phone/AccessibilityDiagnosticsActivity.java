@@ -16,6 +16,8 @@ import androidx.webkit.WebViewFeature;
 public final class AccessibilityDiagnosticsActivity extends Activity {
     private final Runnable connectionListener=this::update;
     private TextView body;
+    private final android.os.Handler refreshHandler=new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable refresh=this::update;
 
     @Override public void onCreate(Bundle saved){
         super.onCreate(saved);
@@ -46,8 +48,13 @@ public final class AccessibilityDiagnosticsActivity extends Activity {
         update();
     }
 
-    @Override protected void onResume(){super.onResume();update();}
-    @Override protected void onDestroy(){PhoneService.removeConnectionListener(connectionListener);super.onDestroy();}
+    @Override protected void onResume(){
+        super.onResume();update();
+        refreshHandler.removeCallbacks(refresh);
+        for(long delay:new long[]{250,750,1500,3000,6000})refreshHandler.postDelayed(refresh,delay);
+    }
+    @Override protected void onPause(){refreshHandler.removeCallbacks(refresh);super.onPause();}
+    @Override protected void onDestroy(){refreshHandler.removeCallbacks(refresh);PhoneService.removeConnectionListener(connectionListener);super.onDestroy();}
 
     private void update(){
         if(body==null)return;

@@ -68,6 +68,7 @@ on_failure() {
 }
 trap on_failure EXIT
 
+test "$(adb shell getprop ro.build.version.sdk | tr -d '\r')" = 31
 adb install "$apk"
 adb shell input keyevent KEYCODE_WAKEUP
 adb shell wm dismiss-keyguard
