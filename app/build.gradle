@@ -1,0 +1,22 @@
+plugins { id 'com.android.application' }
+android {
+    namespace 'com.xiaoai.phone'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'com.xiaoai.phone'
+        minSdk 26
+        targetSdk 34
+        versionCode (System.getenv('GITHUB_RUN_NUMBER') ?: '1').toInteger()
+        versionName '1.0-v1216'
+    }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    signingConfigs {
+        debug {
+            storeFile rootProject.file('ci/test-signing.jks')
+            storePassword 'xiaoai-debug-only'
+            keyAlias 'xiaoai-debug'
+            keyPassword 'xiaoai-debug-only'
+        }
+    }
+}
+dependencies { implementation 'androidx.webkit:webkit:1.12.1' }
