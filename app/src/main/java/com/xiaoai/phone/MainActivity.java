@@ -18,6 +18,7 @@ public final class MainActivity extends Activity {
     private WebView web;
     private ValueCallback<Uri[]> chooser;
     private boolean resumed;
+    private BackupFiles backupFiles;
     private boolean awaitingSettings;
     static volatile boolean enabled=false;
     @Override public void onCreate(Bundle b) {
@@ -25,9 +26,14 @@ public final class MainActivity extends Activity {
         enabled=getPreferences(MODE_PRIVATE).getBoolean("role_phone_authorized",false);
         web=new WebView(this); setContentView(web);
         WebSettings s=web.getSettings(); s.setJavaScriptEnabled(true); s.setDomStorageEnabled(true); s.setDatabaseEnabled(true);
-        s.setAllowFileAccess(false); s.setAllowContentAccess(false); s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        s.setAllowFileAccess(false); s.setAllowContentAccess(true); s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         WebViewAssetLoader loader=new WebViewAssetLoader.Builder().addPathHandler("/assets/",new WebViewAssetLoader.AssetsPathHandler(this)).build();
+        backupFiles=new BackupFiles(this);
         web.setWebViewClient(new WebViewClient(){
+            @Override public void onPageFinished(WebView v,String url){
+                super.onPageFinished(v,url);
+                if((ORIGIN+"/assets/index.html").equals(url)) backupFiles.installScript(v);
+            }
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r){return loader.shouldInterceptRequest(r.getUrl());}
             @Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){
                 if(!r.isForMainFrame())return false;
@@ -43,6 +49,7 @@ public final class MainActivity extends Activity {
             }
         });
         if(WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)){
+            backupFiles.bind(web,ORIGIN);
             WebViewCompat.addWebMessageListener(web,"PhoneNative",Collections.singleton(ORIGIN),(view,msg,origin,main,reply)->{
                 if(!main||!ORIGIN.equals(origin.toString()))return;
                 try{
@@ -82,7 +89,7 @@ public final class MainActivity extends Activity {
     private JSONObject status(){return PhoneService.json("ok",true,"enabled",enabled&&PhoneService.instance!=null,"connected",PhoneService.instance!=null);}
     @Override protected void onResume(){super.onResume();resumed=true;if(awaitingSettings){awaitingSettings=false;android.os.Handler handler=new android.os.Handler(getMainLooper());handler.postDelayed(()->{if(resumed&&PhoneService.instance!=null)setAuthorized(true);if(web!=null)web.evaluateJavascript("window.xaNativeRefresh&&window.xaNativeRefresh()",null);},700);}if(web!=null)web.evaluateJavascript("window.xaNativeRefresh&&window.xaNativeRefresh()",null);}
     @Override protected void onPause(){resumed=false;super.onPause();}
-    @Override protected void onActivityResult(int r,int c,Intent d){super.onActivityResult(r,c,d);if(r==42&&chooser!=null){chooser.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(c,d));chooser=null;}}
+    @Override protected void onActivityResult(int r,int c,Intent d){super.onActivityResult(r,c,d);if(backupFiles!=null&&backupFiles.onResult(r,c,d))return;if(r==42&&chooser!=null){chooser.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(c,d));chooser=null;}}
     @Override public void onBackPressed(){if(web.canGoBack())web.goBack();else super.onBackPressed();}
-    @Override protected void onDestroy(){enabled=false;if(PhoneService.instance!=null)PhoneService.instance.cancel();if(web!=null)web.destroy();super.onDestroy();}
+    @Override protected void onDestroy(){enabled=false;if(PhoneService.instance!=null)PhoneService.instance.cancel();if(backupFiles!=null)backupFiles.close();if(chooser!=null){chooser.onReceiveValue(null);chooser=null;}if(web!=null)web.destroy();super.onDestroy();}
 }
