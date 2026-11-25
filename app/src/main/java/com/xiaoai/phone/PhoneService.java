@@ -141,8 +141,29 @@ public final class PhoneService extends AccessibilityService {
         boolean ok=false;String why="Android 已接受動作";long g=generation;busy=true;
         try{
             switch(action){
-                case "tap_text": {String t=a.optString("text");if(t.trim().isEmpty()||risky(t))throw new IllegalArgumentException("此操作需由使用者親手完成");ok=click(exact(r,t));break;}
-                case "type_text": {String t=a.optString("text");AccessibilityNodeInfo f=r.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);if(f==null||!f.isEditable()||f.isPassword()||t.isEmpty()||t.length()>500)throw new IllegalArgumentException("找不到安全的已聚焦輸入框，或文字過長");Bundle b=new Bundle();b.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,t);ok=f.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,b);break;}
+                case "tap_text": {String t=a.optString("text");if(t.trim().isEmpty()||risky(t))throw new IllegalArgumentException("此操作需由使用者親手完成");AccessibilityNodeInfo node=exact(r,t);ok=click(node);
+                    if(!ok&&node!=null){
+                        Rect b=new Rect();node.getBoundsInScreen(b);Rect window=new Rect();r.getBoundsInScreen(window);
+                        if(!b.isEmpty()&&window.contains(b.centerX(),b.centerY())&&!dangerousAt(r,b.centerX(),b.centerY(),0)){
+                            Path path=new Path();path.moveTo(b.centerX(),b.centerY());
+                            GestureDescription gesture=new GestureDescription.Builder().addStroke(new GestureDescription.StrokeDescription(path,0,80)).build();
+                            ok=dispatchGesture(gesture,new GestureResultCallback(){
+                                @Override public void onCompleted(GestureDescription gd){h.postDelayed(()->finish(g,cb,true,"已执行文字定位点击"),400);}
+                                @Override public void onCancelled(GestureDescription gd){finish(g,cb,false,"点击手势被取消");}
+                            },h);
+                            if(ok)return;
+                        }
+                    }
+                    break;}
+                case "type_text": {String t=a.optString("text");AccessibilityNodeInfo f=r.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);if(f==null||!f.isEditable()||f.isPassword()||t.isEmpty()||t.length()>500)throw new IllegalArgumentException("找不到安全的已聚焦輸入框，或文字過長");Bundle b=new Bundle();b.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,t);ok=f.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,b);
+                    if(ok){h.postDelayed(()->{
+                        if(g!=generation){cb.accept(result(false,"任务已停止",""));return;}
+                        AccessibilityNodeInfo updated=root();
+                        AccessibilityNodeInfo focus=updated==null?null:updated.findFocus(AccessibilityNodeInfo.FOCUS_INPUT);
+                        boolean verified=focus!=null&&!focus.isPassword()&&t.contentEquals(focus.getText()==null?"":focus.getText());
+                        finish(g,cb,verified,verified?"已观察到输入框文字与请求一致":"输入请求已接受，但未确认文字，请重新定位输入框");
+                    },450);return;}
+                    break;}
                 case "back":ok=performGlobalAction(GLOBAL_ACTION_BACK);break;
                 case "send_key":throw new IllegalArgumentException("發送或提交請由使用者親手完成");
                 case "tap_xy":case "long_press":case "swipe": {
