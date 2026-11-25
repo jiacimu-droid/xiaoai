@@ -102,6 +102,15 @@ jobs:
           set -euo pipefail
           tools="$ANDROID_HOME/build-tools/35.0.0"
           apk=apk-artifacts/XiaoAi.apk
+          python3 - "$apk" <<'PY'
+          import sys, zipfile
+          with zipfile.ZipFile(sys.argv[1]) as z:
+              for asset in ['phone-bridge.js', 'runtime-log.js', 'runtime-log-early.js']:
+                  assert 'assets/' + asset in z.namelist(), asset
+              html = z.read('assets/index.html').decode('utf-8')
+              assert 'id="xaNativeRow"' in html and 'id="xaLogStat"' in html
+              assert html.index('src="runtime-log-early.js"') < html.index('src="phone-bridge.js"') < html.index('src="runtime-log.js"')
+          PY
           "$tools/apksigner" verify --verbose --print-certs "$apk" | tee apk-signature.txt
           expected="$(keytool -exportcert -keystore ci/test-signing.jks -storepass xiaoai-debug-only -alias xiaoai-debug | sha256sum | cut -d ' ' -f 1)"
           actual="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' apk-signature.txt)"
@@ -171,4 +180,12 @@ jobs:
           REVISION: ${{ needs.prepare.outputs.revision }}
         run: |
           tag="apk-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
-          gh release create "$tag" apk-artifacts/XiaoAi.apk --repo "$GITHUB_REPOSITORY" --target "$REVISION" --title "小爱机 APK #${GITHUB_RUN_NUMBER}" --notes "Android 测试版；来源提交 ${REVISION}。"
+          for attempt in 1 2 3; do
+            if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release upload "$tag" apk-artifacts/XiaoAi.apk --clobber --repo "$GITHUB_REPOSITORY" && exit 0
+            else
+              gh release create "$tag" apk-artifacts/XiaoAi.apk --repo "$GITHUB_REPOSITORY" --target "$REVISION" --title "小爱机 APK #${GITHUB_RUN_NUMBER}" --notes "Android 测试版；来源提交 ${REVISION}。" && exit 0
+            fi
+            sleep "$((attempt * 2))"
+          done
+          exit 1

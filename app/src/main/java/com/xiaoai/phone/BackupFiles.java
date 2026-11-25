@@ -12,7 +12,7 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 
-/** User-selected JSON backups, separate from the accessibility command channel. */
+/** User-selected backups and diagnostic files, separate from the accessibility command channel. */
 final class BackupFiles {
     private static final int SAVE=43;
     private static final long MAX_BYTES=128L*1024*1024;
@@ -21,6 +21,7 @@ final class BackupFiles {
     private OutputStream out;
     private long bytes;
     private String filename;
+    private boolean diagnostic;
     private boolean choosing;
     BackupFiles(Activity activity){this.activity=activity;}
     void installScript(WebView web){
@@ -45,22 +46,24 @@ final class BackupFiles {
                     case "begin":
                         if(choosing)throw new IOException("请先完成上一次保存");
                         clear();
-                        filename=j.optString("name","小爱机备份.json").replaceAll("[/\\\\\\p{Cntrl}]","_");
-                        if(!filename.endsWith(".json"))filename+=".json";
-                        temp=File.createTempFile("backup-", ".json",activity.getCacheDir());
+                        diagnostic="report".equals(j.optString("format"));
+                        String extension=diagnostic?".txt":".json";
+                        filename=j.optString("name",diagnostic?"小爱机运行报告.txt":"小爱机备份.json").replaceAll("[/\\\\\\p{Cntrl}]","_");
+                        if(!filename.endsWith(extension))filename+=extension;
+                        temp=File.createTempFile("export-", extension,activity.getCacheDir());
                         out=new BufferedOutputStream(new FileOutputStream(temp));
                         break;
                     case "chunk":
                         if(out==null)throw new IOException("备份尚未开始");
                         byte[] data=j.getString("text").getBytes(StandardCharsets.UTF_8);
-                        if(bytes+data.length>MAX_BYTES)throw new IOException("备份超过128MB");
+                        if(bytes+data.length>(diagnostic?1024L*1024:MAX_BYTES))throw new IOException(diagnostic?"报告超过1MB":"备份超过128MB");
                         out.write(data);bytes+=data.length;
                         break;
                     case "finish":
                         if(out==null)throw new IOException("备份尚未开始");
                         out.close();out=null;
                         Intent save=new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
-                            .setType("application/json").putExtra(Intent.EXTRA_TITLE,filename);
+                            .setType(diagnostic?"text/plain":"application/json").putExtra(Intent.EXTRA_TITLE,filename);
                         activity.startActivityForResult(save,SAVE);choosing=true;
                         break;
                     case "cancel": if(!choosing)clear();break;
@@ -73,15 +76,16 @@ final class BackupFiles {
     boolean onResult(int request,int result,Intent data){
         if(request!=SAVE)return false;
         choosing=false;
+        final String kind=diagnostic?"报告":"备份";
         if(result!=Activity.RESULT_OK||data==null||data.getData()==null){clear();return true;}
         final Uri uri=data.getData(); final File input=temp;temp=null;bytes=0;
-        if(input==null){notice("备份文件不存在");return true;}
+        if(input==null){notice(kind+"文件不存在");return true;}
         new Thread(()->{
             try(InputStream in=new FileInputStream(input);OutputStream dest=activity.getContentResolver().openOutputStream(uri,"wt")){
                 if(dest==null)throw new IOException("无法打开目标文件");
                 byte[] b=new byte[32768];int n;while((n=in.read(b))!=-1)dest.write(b,0,n);dest.flush();
-                notice("备份已保存");
-            }catch(Exception e){notice("保存备份失败："+e.getMessage());}
+                notice(kind+"已保存");
+            }catch(Exception e){notice("保存"+kind+"失败："+e.getMessage());}
             finally{input.delete();}
         },"xiaoai-backup").start();
         return true;

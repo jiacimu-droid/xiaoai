@@ -132,6 +132,7 @@ final class AppLocks {
         }
         rules = next;
         refreshExpiry();
+        AccessibilityDiagnostics.lockStage(service, latestExpiry>System.currentTimeMillis()?"規則已儲存":"目前沒有有效鎖定");
         hide();
         resetVisit();
         inspect();
@@ -199,6 +200,7 @@ final class AppLocks {
             }
             showCover();
             boolean accepted = service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK);
+            AccessibilityDiagnostics.lockStage(service,accepted?"Android 接受返回請求":"Android 拒絕返回請求");
             show(rules.optJSONObject(current.pkg));
             if (!accepted) {
                 attempt.backRejected(now);
@@ -210,7 +212,8 @@ final class AppLocks {
                 resetVisit();
             } else {
                 showCover();
-                service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME);
+                boolean accepted=service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME);
+                AccessibilityDiagnostics.lockStage(service,accepted?"Android 接受回主屏請求":"Android 拒絕回主屏請求");
             }
         }
     }

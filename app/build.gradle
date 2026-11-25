@@ -1,4 +1,36 @@
 plugins { id 'com.android.application' }
+
+def webAssets = layout.buildDirectory.dir('generated/xiaoaiWebAssets')
+def prepareWebAssets = tasks.register('prepareWebAssets', Sync) {
+    filteringCharset = 'UTF-8'
+    from('src/main/assets') { exclude 'index.html' }
+    from('src/main/assets/index.html') {
+        filter { String line ->
+            switch (line.trim()) {
+                case '<meta charset="UTF-8">':
+                    return line + '\n<script src="runtime-log-early.js"></script>'
+                case '<script src="phone-bridge.js"></script>':
+                    return line + '\n<script src="runtime-log.js"></script>'
+                case '<div class="set-sec-title">存儲設置</div>':
+                    return '''    <div class="set-sec-title">運行日誌</div>
+    <div class="sec">
+      <div id="xaLogStat" style="font-size:11px;color:var(--ink-soft);margin-bottom:8px"></div>
+      <div class="row" style="gap:8px">
+        <button type="button" class="btn full" onclick="xaLogOpen()">打開運行日誌</button>
+        <button type="button" class="btn full ghost" onclick="xaLogExport()">匯出報告</button>
+      </div>
+    </div>
+''' + line
+                default:
+                    if (line.contains('id="verPill"')) return line.replace('v1216 · 不再每輪「對了」硬開新話題', 'v1217 · 運行日誌')
+                    if (line.contains('id="appVersionTag"')) return line.replace('v1216', 'v1217')
+                    return line
+            }
+        }
+    }
+    into(webAssets)
+}
+
 android {
     namespace 'com.xiaoai.phone'
     compileSdk 35
@@ -7,7 +39,7 @@ android {
         minSdk 26
         targetSdk 34
         versionCode = (System.getenv('GITHUB_RUN_NUMBER') ?: '1').toInteger()
-        versionName '1.0-v1216'
+        versionName '1.0-v1217'
     }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
     signingConfigs {
@@ -17,6 +49,12 @@ android {
             keyAlias 'xiaoai-debug'
             keyPassword 'xiaoai-debug-only'
         }
+    }
+}
+android.sourceSets.main.assets.setSrcDirs([webAssets.get().asFile])
+tasks.configureEach {
+    if (name == 'preBuild' || (name.startsWith('merge') && name.endsWith('Assets'))) {
+        dependsOn(prepareWebAssets)
     }
 }
 dependencies { implementation 'androidx.webkit:webkit:1.12.1' }

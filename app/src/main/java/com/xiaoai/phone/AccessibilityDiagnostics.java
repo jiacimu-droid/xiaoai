@@ -43,6 +43,12 @@ final class AccessibilityDiagnostics {
         Log.i(TAG, "First system accessibility event received");
     }
 
+    static void lockStage(Context context, String phase) {
+        SharedPreferences saved = prefs(context);
+        if (phase.equals(saved.getString("lockStage", ""))) return;
+        saved.edit().putString("lockStage",phase).putLong("lockStageAt",System.currentTimeMillis()).apply();
+    }
+
     static void fault(Context context, String operation, Throwable error) {
         SharedPreferences saved = prefs(context);
         String detail = operation + " / " + error.getClass().getSimpleName();
@@ -95,6 +101,8 @@ final class AccessibilityDiagnostics {
                 .append("網頁原生橋接：").append(webBridgeSupported ? "受支持" : "不受支持")
                 .append(pageReported ? "，頁面已查詢狀態" : "，本次未觀察到頁面查詢");
         String error = saved.getString("fault", "");
+        String lock = saved.getString("lockStage", "");
+        if (!lock.isEmpty()) report.append("\n最近應用鎖階段：").append(lock).append(" · ").append(time(saved.getLong("lockStageAt", 0)));
         if (!error.isEmpty()) report.append("\n最近執行異常：").append(error).append(" · ").append(time(saved.getLong("faultAt", 0)));
         if (Build.VERSION.SDK_INT >= 30) appendRecentExit(context, report);
         return report.toString();

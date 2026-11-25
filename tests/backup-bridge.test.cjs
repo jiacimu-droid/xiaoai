@@ -5,9 +5,10 @@ const src=fs.readFileSync('app/src/main/assets/backup-bridge.js','utf8');
 const html=fs.readFileSync('app/src/main/assets/index.html','utf8');
 const legacy=html.slice(html.indexOf('const BACKUP_KEYS='),html.indexOf('function exportData(){'));
 function make({native=false,idb,write}={}){
- const store=new Map(),messages=[],clipboard=[],chunks=[],window={__IDBM:{}};
+ const store=new Map(),messages=[],clipboard=[],chunks=[],commands=[],window={__IDBM:{}};
  if(native)window.BackupNative={postMessage(raw){
   const m=JSON.parse(raw);
+  commands.push(m);
   if(m.action==='chunk')chunks.push(m.text);
   queueMicrotask(()=>this.onmessage({data:JSON.stringify({id:m.id,ok:true})}));
  }};
@@ -17,7 +18,7 @@ function make({native=false,idb,write}={}){
   IDBX:idb,navigator:{clipboard:{writeText(text){clipboard.push(text);}}},toast:s=>messages.push(s),
   closeModal:()=>{},setTimeout:()=>0,clearTimeout:()=>{},location:{reload:()=>{}}});
  vm.runInContext(legacy+'\n'+src,ctx);
- return {window,store,messages,clipboard,chunks,legacyBackup:ctx.backupObject,...ctx.module.exports};
+ return {window,store,messages,clipboard,chunks,commands,legacyBackup:ctx.backupObject,...ctx.module.exports};
 }
 test('accept original browser v1 envelope, BOM and plain legacy payload',()=>{
  const {decode}=make(), chars=[{name:'测试角色',messages:[{text:'你好'}]}];
@@ -73,4 +74,12 @@ test('a write failure restores disk data and cached data',async()=>{
  assert.equal(apk.window.__IDBM.theme,'current');
  assert.equal(apk.store.get('apis'),'[{"model":"before"}]');
  assert.match(apk.messages.at(-1),/已恢复原存档/);
+});
+test('a diagnostic report uses the existing Android save flow with a distinct text format',async()=>{
+ const apk=make({native:true});
+ await apk.window.xaSaveDiagnosticReport('report.txt','运行报告\n無障礙已連接');
+ assert.deepEqual(apk.commands.map(m=>m.action),['begin','chunk','finish']);
+ assert.equal(apk.commands[0].format,'report');
+ assert.equal(apk.commands[0].name,'report.txt');
+ assert.equal(apk.chunks.join(''),'运行报告\n無障礙已連接');
 });

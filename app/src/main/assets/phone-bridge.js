@@ -15,7 +15,7 @@ bridge.onmessage=function(e){
 function rpc(action,args){return new Promise(resolve=>{
  const id=String(++seq),timer=setTimeout(()=>{
   pending.delete(id);resolve({ok:false,uncertain:true,why:'原生操作未回報，請先觀察，不要直接重試',screen:''});
- },action==='status'?2500:15000);
+ },action==='status'||action==='accessibility_diagnostics_report'?2500:15000);
  pending.set(id,{resolve,timer});
  try{bridge.postMessage(JSON.stringify({id,command:Object.assign({},args||{},{action})}));}
  catch(e){clearTimeout(timer);pending.delete(id);resolve({ok:false,why:'無法連接 Android',screen:''});}
@@ -46,6 +46,7 @@ function unavailable(s){
  return '無障礙未授權，請在系統設置開啟「小愛機 · 手機操作」。';
 }
 g.xaNativeRefresh=refresh;
+g.xaPhoneDiagnostics=()=>rpc('accessibility_diagnostics_report');
 g.xaNativeUnavailable=unavailable;
 g.xaNativeWaitForConnection=async function(){
  let current=await refresh();
@@ -231,7 +232,7 @@ if(typeof oldSensitive==='function')g.xaSensitive=function(action,args){
  if(action==='tap_text'&&/^(发送消息|發送消息|傳送訊息|发消息|發訊息)$/.test(String(args?.text||'')))return false;
  return oldSensitive.apply(this,arguments);
 };
-const modelOnly=async function(cfg,system,user){
+const requestModel=async function(cfg,system,user){
  let last;
  for(const base of cands(cfg.url)){
    const controller=new AbortController();
@@ -246,6 +247,10 @@ const modelOnly=async function(cfg,system,user){
    if(res.status!==404)throw last;
  }
  throw last||Error('模型接口不可用');
+};
+const modelOnly=async function(...args){
+ try{const result=await requestModel(...args);g.xaLogApiOK?.();return result;}
+ catch(e){g.xaLogApiErr?.(e);throw e;}
 };
 g.xaPhoneClassify=(cfg,msgs)=>modelOnly(cfg,msgs[0].content,msgs[1].content);
 g.xaTaskSys=function(t,c){

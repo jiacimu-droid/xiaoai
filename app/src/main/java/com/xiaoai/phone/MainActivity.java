@@ -74,6 +74,10 @@ public final class MainActivity extends Activity {
                     java.util.function.Consumer<JSONObject> respond=r->runOnUiThread(()->{try{reply.postMessage(PhoneService.json("id",id,"result",r).toString());}catch(Exception ignored){}});
                     String action=command.optString("action");
                     if("status".equals(action)){statusReply=reply;respond.accept(status());return;}
+                    if("accessibility_diagnostics_report".equals(action)){
+                        respond.accept(PhoneService.json("ok",true,"report",AccessibilityDiagnostics.report(this,true,statusReply!=null)));
+                        return;
+                    }
                     if("app_lock_palette".equals(action)){
                         AppLocks.savePalette(this,command);respond.accept(PhoneService.result(true,"",""));return;
                     }

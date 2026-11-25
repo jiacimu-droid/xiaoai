@@ -49,20 +49,23 @@ async function completeBackup(){
  return obj;
 }
 if(native){
- g.exportData=async function(){
+ async function saveFile(name,format,readText){
   if(busy)return;busy=true;
+  let started=false;
   try{
-   const text=JSON.stringify(await completeBackup());
-   await call('begin',{name:backupName()});
+   const text=await readText();
+   await call('begin',{name,format});started=true;
    for(let i=0;i<text.length;){
     let end=Math.min(i+24000,text.length);
     if(end<text.length&&text.charCodeAt(end-1)>=0xD800&&text.charCodeAt(end-1)<=0xDBFF)end--;
     await call('chunk',{text:text.slice(i,end)});i=end;
    }
-   await call('finish');toast('请选择备份保存位置');
-  }catch(e){try{await call('cancel');}catch(_){}toast('导出失败：'+e.message);}
+   await call('finish');toast(format==='report'?'请选择报告保存位置':'请选择备份保存位置');
+  }catch(e){if(started)try{await call('cancel');}catch(_){}toast('导出失败：'+e.message);}
   finally{busy=false;}
- };
+ }
+ g.exportData=()=>saveFile(backupName(),'backup',async()=>JSON.stringify(await completeBackup()));
+ g.xaSaveDiagnosticReport=(name,text)=>saveFile(name,'report',()=>text);
 }
 g.copyExport=async function(){
  if(busy)return;busy=true;
