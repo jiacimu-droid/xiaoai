@@ -90,12 +90,25 @@ jobs:
           test -f "$sdk_root/platforms/android-35/android.jar"
           test -x "$sdk_root/build-tools/35.0.0/apksigner"
       - run: node --check app/src/main/assets/phone-bridge.js && node --test tests/phone-bridge.test.cjs
+      - name: Check fixed private-use signing key
+        run: |
+          test "$(git hash-object ci/test-signing.jks)" = "c982bfd903de2c03fe9a76e60b3d2696336f5260"
       - run: gradle --no-daemon --stacktrace :app:assembleDebug
       - name: Verify and stage APK
         run: |
           mkdir -p apk-artifacts
           cp app/build/outputs/apk/debug/app-debug.apk apk-artifacts/XiaoAi.apk
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose apk-artifacts/XiaoAi.apk
+          set -euo pipefail
+          tools="$ANDROID_HOME/build-tools/35.0.0"
+          apk=apk-artifacts/XiaoAi.apk
+          "$tools/apksigner" verify --verbose --print-certs "$apk" | tee apk-signature.txt
+          expected="$(keytool -exportcert -keystore ci/test-signing.jks -storepass xiaoai-debug-only -alias xiaoai-debug | sha256sum | cut -d ' ' -f 1)"
+          actual="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' apk-signature.txt)"
+          test "$actual" = "$expected"
+          package_line="$("$tools/aapt" dump badging "$apk" | sed -n '1p')"
+          echo "$package_line"
+          [[ "$package_line" == "package: name='com.xiaoai.phone' versionCode='$GITHUB_RUN_NUMBER' "* ]]
+          echo "Fixed package ID, fixed signer and increasing versionCode verified." >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
           name: XiaoAi-APK
