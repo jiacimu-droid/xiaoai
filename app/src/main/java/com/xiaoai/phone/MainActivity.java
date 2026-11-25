@@ -62,7 +62,7 @@ public final class MainActivity extends Activity {
                     if("authorize".equals(action)){
                         if(!resumed){respond.accept(status());return;}
                         new AlertDialog.Builder(this).setTitle("授權無障礙")
-                          .setMessage("允許角色操作你選擇的 App；畫面文字可能交給你設定的模型。")
+                          .setMessage("允許角色操作你選擇的 App；所选应用的可见文字和截图可能发送给你配置的模型。")
                           .setPositiveButton("授權",(d,w)->{if(PhoneService.instance!=null){setAuthorized(true);}else{awaitingSettings=true;startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));}respond.accept(status());})
                           .setNegativeButton("取消",(d,w)->respond.accept(status())).setOnCancelListener(d->respond.accept(status())).show();return;
                     }
@@ -74,7 +74,7 @@ public final class MainActivity extends Activity {
                         PhoneService.Target target=service.resolve(command.optString("app"));
                         if(target==null){respond.accept(PhoneService.result(false,"找不到可操作的 App", ""));return;}
                         new AlertDialog.Builder(this).setTitle("開啟 "+target.label+"？")
-                         .setMessage("允許本次任務操作此 App 的可見畫面。")
+                         .setMessage("允许本次任务操作此应用的可见画面，并把必要的文字和窗口截图发送给你配置的模型。")
                          .setPositiveButton("允許",(d,w)->service.launch(target,respond))
                          .setNegativeButton("取消",(d,w)->respond.accept(PhoneService.result(false,"使用者取消", "")))
                          .setOnCancelListener(d->respond.accept(PhoneService.result(false,"使用者取消", ""))).show();return;

@@ -75,7 +75,7 @@ public final class PhoneService extends AccessibilityService {
     }
     private DisplayMetrics screenMetrics(){DisplayMetrics m=new DisplayMetrics();WindowManager wm=getSystemService(WindowManager.class);if(wm!=null)wm.getDefaultDisplay().getRealMetrics(m);else m.setTo(getResources().getDisplayMetrics());return m;}
     private void dump(AccessibilityNodeInfo n,StringBuilder b,int depth,int[] count){
-        if(n==null||depth>25||++count[0]>400||b.length()>1150)return;
+        if(n==null||depth>25||++count[0]>400||b.length()>3400)return;
         if(n.isVisibleToUser()&&!n.isPassword()){
             String t=n.getText()!=null?n.getText().toString():n.getContentDescription()!=null?n.getContentDescription().toString():"";
             if(t.trim().isEmpty()&&n.isEditable()&&n.getHintText()!=null)t=n.getHintText().toString();
@@ -85,11 +85,44 @@ public final class PhoneService extends AccessibilityService {
         }
         for(int j=0;j<n.getChildCount();j++)dump(n.getChild(j),b,depth+1,count);
     }
-    private String observe(AccessibilityNodeInfo r){StringBuilder b=new StringBuilder();dump(r,b,0,new int[]{0});observedAt=SystemClock.elapsedRealtime();return b.length()==0?"沒有可讀文字；請勿猜測座標":b.substring(0,Math.min(1200,b.length()));}
+    private String observe(AccessibilityNodeInfo r){StringBuilder b=new StringBuilder();dump(r,b,0,new int[]{0});observedAt=SystemClock.elapsedRealtime();return "前台应用："+allowed+"；屏幕："+screenMetrics().widthPixels+"×"+screenMetrics().heightPixels+"；"+(b.length()==0?"没有可读控件；不要猜坐标":b.substring(0,Math.min(3500,b.length())));}
     private void finish(long g,Consumer<JSONObject> cb,boolean accepted,String why){
         if(g!=generation){cb.accept(result(false,"任務已停止", ""));return;}busy=false;AccessibilityNodeInfo r=root();
         if(r==null){observedAt=0;cb.accept(result(false,"目標畫面未確認、已離開授權 App 或受保護；不要盲目重試", ""));return;}
         cb.accept(result(accepted,why+"；僅為動作回執，不代表任務完成",observe(r)));
+    }
+    // Only the currently approved app window, not the whole display.
+    // The caller asks explicitly for a fresh frame; secure windows remain inaccessible.
+    private void captureWindow(AccessibilityNodeInfo r,Consumer<JSONObject> cb){
+        if(android.os.Build.VERSION.SDK_INT<34){
+            cb.accept(result(false,"Android 14 以下不支持独立窗口截图，请使用控件树",observe(r)));return;
+        }
+        final long g=generation;final int window=r.getWindowId();
+        busy=true;
+        try{
+            takeScreenshotOfWindow(window,getMainExecutor(),new TakeScreenshotCallback(){
+                @Override public void onSuccess(ScreenshotResult shot){
+                    android.graphics.Bitmap hardware=null,software=null,scaled=null;
+                    try{
+                        AccessibilityNodeInfo current=root();
+                        if(g!=generation||current==null||current.getWindowId()!=window){
+                            cb.accept(result(false,"窗口已经变化，丢弃旧截图",""));return;
+                        }
+                        hardware=android.graphics.Bitmap.wrapHardwareBuffer(shot.getHardwareBuffer(),shot.getColorSpace());
+                        if(hardware==null)throw new IllegalStateException("窗口截图不可用");
+                        software=hardware.copy(android.graphics.Bitmap.Config.ARGB_8888,false);
+                        if(software==null)throw new IllegalStateException("无法读取窗口截图");
+                        float scale=Math.min(1f,1000f/Math.max(software.getWidth(),software.getHeight()));
+                        scaled=android.graphics.Bitmap.createScaledBitmap(software,Math.max(1,Math.round(software.getWidth()*scale)),Math.max(1,Math.round(software.getHeight()*scale)),true);
+                        java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream();
+                        if(!scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG,75,out))throw new IllegalStateException("截图编码失败");
+                        cb.accept(json("ok",true,"why","已读取目标窗口图片；坐标以控件树为准","screen",observe(current),"image","data:image/jpeg;base64,"+android.util.Base64.encodeToString(out.toByteArray(),android.util.Base64.NO_WRAP)));
+                    }catch(Exception e){cb.accept(result(false,"截图失败："+e.getMessage(),""));}
+                    finally{if(scaled!=null&&scaled!=software)scaled.recycle();if(software!=null)software.recycle();if(hardware!=null)hardware.recycle();shot.getHardwareBuffer().close();if(g==generation)busy=false;}
+                }
+                @Override public void onFailure(int errorCode){if(g==generation)busy=false;AccessibilityNodeInfo current=root();cb.accept(result(false,"系统窗口截图不可用（"+errorCode+"），继续使用控件树",current==null?"":observe(current)));}
+            });
+        }catch(Exception e){busy=false;cb.accept(result(false,"窗口截图不可用："+e.getMessage(),observe(r)));}
     }
     private static double coord(JSONObject a,String k){double v=a.optDouble(k,Double.NaN);if(!Double.isFinite(v)||v<0||v>1)throw new IllegalArgumentException("座標須在 0~1");return v;}
     private boolean risky(String s){return s!=null&&s.matches("(?is).*(發送|发送|付款|支付|下單|下单|轉帳|转账|刪除|删除|確認購買|确认购买|send|purchase|pay now|delete).*" );}
@@ -102,7 +135,8 @@ public final class PhoneService extends AccessibilityService {
     void request(JSONObject a,Consumer<JSONObject> cb){
         if(busy){cb.accept(result(false,"另一動作尚未結束", ""));return;}
         AccessibilityNodeInfo r=root();if(r==null){cb.accept(result(false,"請先開啟並授權目標 App；受保護或非目標畫面不可操作", ""));return;}
-        String action=a.optString("action");if(action.equals("screenshot")||action.equals("inspect")){cb.accept(result(true,"已讀取可見控制項文字（非圖片截圖）",observe(r)));return;}
+        String action=a.optString("action");if(action.equals("screenshot")||action.equals("inspect")){cb.accept(result(true,"已读取当前控件树",observe(r)));return;}
+        if(action.equals("capture_window")){captureWindow(r,cb);return;}
         if(SystemClock.elapsedRealtime()-observedAt>60000||observedAt==0){cb.accept(result(false,"畫面已過期，請重新觀察", ""));return;}
         boolean ok=false;String why="Android 已接受動作";long g=generation;busy=true;
         try{
