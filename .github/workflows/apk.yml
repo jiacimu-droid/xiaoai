@@ -74,8 +74,21 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - uses: android-actions/setup-android@v3
-      - run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Use hosted Android SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          sdkmanager="$sdk_root/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$sdkmanager" ]; then sdkmanager="$(command -v sdkmanager)"; fi
+          echo "ANDROID_HOME=$sdk_root" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$sdk_root" >> "$GITHUB_ENV"
+          if [ ! -f "$sdk_root/platforms/android-35/android.jar" ] || [ ! -x "$sdk_root/build-tools/35.0.0/apksigner" ]; then
+            (yes || true) | "$sdkmanager" --sdk_root="$sdk_root" --licenses >/dev/null
+            "$sdkmanager" --sdk_root="$sdk_root" 'platforms;android-35' 'build-tools;35.0.0'
+          fi
+          test -f "$sdk_root/platforms/android-35/android.jar"
+          test -x "$sdk_root/build-tools/35.0.0/apksigner"
       - run: node --check app/src/main/assets/phone-bridge.js && node --test tests/phone-bridge.test.cjs
       - run: gradle --no-daemon --stacktrace :app:assembleDebug
       - name: Verify and stage APK
