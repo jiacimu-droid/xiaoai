@@ -95,29 +95,6 @@ jobs:
         run: |
           test "$(git hash-object ci/test-signing.jks)" = "c982bfd903de2c03fe9a76e60b3d2696336f5260"
       - run: gradle --no-daemon --stacktrace :app:assembleDebug
-      - name: Enable Android emulator acceleration
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-      - name: Verify real Android 12L accessibility events
-        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
-        with:
-          api-level: 32
-          avd-name: xiaoai-api-32
-          target: google_apis
-          arch: x86_64
-          disable-animations: true
-          script: bash tests/android-accessibility-smoke.sh app/build/outputs/apk/debug/app-debug.apk
-      - name: Verify real Android 15 accessibility events
-        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
-        with:
-          api-level: 35
-          avd-name: xiaoai-api-35
-          target: google_apis
-          arch: x86_64
-          disable-animations: true
-          script: bash tests/android-accessibility-smoke.sh app/build/outputs/apk/debug/app-debug.apk
       - name: Verify and stage APK
         run: |
           mkdir -p apk-artifacts
@@ -143,11 +120,55 @@ jobs:
           name: XiaoAi-APK
           path: apk-artifacts/*.apk
           if-no-files-found: error
+  accessibility:
+    needs: [prepare, apk]
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [32, 35]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.revision }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: XiaoAi-APK
+          path: apk-artifacts
+      - name: Enable Android emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Verify real Android accessibility events
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: ${{ matrix.api }}
+          avd-name: xiaoai-api-${{ matrix.api }}
+          target: google_apis
+          arch: x86_64
+          disk-size: 3G
+          emulator-boot-timeout: 240
+          disable-animations: true
+          script: bash tests/android-accessibility-smoke.sh apk-artifacts/XiaoAi.apk
+  publish:
+    needs: [prepare, apk, accessibility]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: XiaoAi-APK
+          path: apk-artifacts
       - name: Publish directly downloadable APK
-        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
           REVISION: ${{ needs.prepare.outputs.revision }}
         run: |
           tag="apk-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
-          gh release create "$tag" apk-artifacts/*.apk --target "$REVISION" --title "小爱机 APK #${GITHUB_RUN_NUMBER}" --notes "Android 测试版；来源提交 ${REVISION}。"
+          gh release create "$tag" apk-artifacts/XiaoAi.apk --repo "$GITHUB_REPOSITORY" --target "$REVISION" --title "小爱机 APK #${GITHUB_RUN_NUMBER}" --notes "Android 测试版；来源提交 ${REVISION}。"
