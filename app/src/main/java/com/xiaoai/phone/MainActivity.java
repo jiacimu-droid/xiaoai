@@ -2,10 +2,14 @@ package com.xiaoai.phone;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.database.ContentObserver;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.webkit.*;
+import androidx.webkit.JavaScriptReplyProxy;
 import androidx.webkit.WebViewAssetLoader;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
@@ -18,6 +22,12 @@ public final class MainActivity extends Activity {
     private ValueCallback<Uri[]> chooser;
     private boolean resumed;
     private BackupFiles backupFiles;
+    private JavaScriptReplyProxy statusReply;
+    private long statusRevision;
+    private final Runnable connectionListener=this::publishStatus;
+    private final ContentObserver grantObserver=new ContentObserver(new Handler(Looper.getMainLooper())){
+        @Override public void onChange(boolean selfChange){publishStatus();}
+    };
     @Override public void onCreate(Bundle b) {
         super.onCreate(b);
         web=new WebView(this); setContentView(web);
@@ -26,6 +36,10 @@ public final class MainActivity extends Activity {
         WebViewAssetLoader loader=new WebViewAssetLoader.Builder().addPathHandler("/assets/",new WebViewAssetLoader.AssetsPathHandler(this)).build();
         backupFiles=new BackupFiles(this);
         web.setWebViewClient(new WebViewClient(){
+            @Override public void onPageStarted(WebView v,String url,android.graphics.Bitmap favicon){
+                statusReply=null;
+                super.onPageStarted(v,url,favicon);
+            }
             @Override public void onPageFinished(WebView v,String url){
                 super.onPageFinished(v,url);
                 if((ORIGIN+"/assets/index.html").equals(url)) backupFiles.installScript(v);
@@ -47,26 +61,36 @@ public final class MainActivity extends Activity {
         if(WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)){
             backupFiles.bind(web,ORIGIN);
             WebViewCompat.addWebMessageListener(web,"PhoneNative",Collections.singleton(ORIGIN),(view,msg,origin,main,reply)->{
-                if(!main||!ORIGIN.equals(origin.toString()))return;
+                if(!main||!isAppOrigin(origin))return;
                 try{
                     String raw=msg.getData(); if(raw==null||raw.length()>12000)return;
                     JSONObject req=new JSONObject(raw); String id=req.getString("id"); JSONObject command=req.getJSONObject("command");
                     java.util.function.Consumer<JSONObject> respond=r->runOnUiThread(()->{try{reply.postMessage(PhoneService.json("id",id,"result",r).toString());}catch(Exception ignored){}});
                     String action=command.optString("action");
-                    if("status".equals(action)){respond.accept(status());return;}
+                    if("status".equals(action)){statusReply=reply;respond.accept(status());return;}
                     if("app_lock_palette".equals(action)){
                         AppLocks.savePalette(this,command);respond.accept(PhoneService.result(true,"",""));return;
                     }
                     PhoneService service=PhoneService.instance;
                     if("disable".equals(action)){
                         if(service!=null)service.revoke();
-                        respond.accept(PhoneService.json("ok",true,"enabled",false,"connected",false));return;
-                    }
-                    if("authorize".equals(action)){
-                        if(resumed&&service==null)startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
                         respond.accept(status());return;
                     }
-                    if(service==null){respond.accept(PhoneService.result(false,"請先授權無障礙", ""));return;}
+                    if("authorize".equals(action)){
+                        if(resumed){
+                            try{startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));}
+                            catch(android.content.ActivityNotFoundException e){
+                                respond.accept(PhoneService.result(false,"無法打開系統無障礙設置", ""));return;
+                            }
+                        }
+                        respond.accept(status());return;
+                    }
+                    if(service==null){
+                        String why=AccessibilityGrant.isEnabled(this)
+                                ?"系統已授權，無障礙服務未連接"
+                                :"請先在系統設置開啟「小愛機 · 手機操作」";
+                        respond.accept(PhoneService.result(false,why,""));return;
+                    }
                     if("cancel".equals(action)){service.cancel();respond.accept(PhoneService.result(true,"已停止", ""));return;}
                     if("lock_app".equals(action)||"unlock_app".equals(action)||"app_locks".equals(action)||"clear_app_locks".equals(action)){
                         if(!resumed){respond.accept(PhoneService.result(false,"请回到小爱机管理应用锁",""));return;}
@@ -82,12 +106,38 @@ public final class MainActivity extends Activity {
                 }catch(Exception ignored){}
             });
         }
+        getContentResolver().registerContentObserver(
+                Settings.Secure.getUriFor(Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES),false,grantObserver);
+        PhoneService.addConnectionListener(connectionListener);
         web.loadUrl(ORIGIN+"/assets/index.html");
     }
-    private JSONObject status(){boolean connected=PhoneService.instance!=null;return PhoneService.json("ok",true,"enabled",connected,"connected",connected);}
-    @Override protected void onResume(){super.onResume();resumed=true;if(web!=null)web.evaluateJavascript("window.xaNativeRefresh&&window.xaNativeRefresh()",null);}
+    private boolean isAppOrigin(Uri origin){
+        int port=origin.getPort();
+        return "https".equals(origin.getScheme())&&"appassets.androidplatform.net".equals(origin.getHost())
+                &&origin.getUserInfo()==null&&(port==-1||port==443);
+    }
+    private JSONObject status(){
+        boolean connected=PhoneService.instance!=null;
+        boolean enabled=connected||AccessibilityGrant.isEnabled(this);
+        return PhoneService.json("ok",true,"enabled",enabled,"connected",connected,"revision",++statusRevision);
+    }
+    private void publishStatus(){
+        if(statusReply==null)return;
+        try{statusReply.postMessage(PhoneService.json("event","accessibility_status","result",status()).toString());}
+        catch(IllegalStateException ignored){statusReply=null;}
+    }
+    @Override protected void onResume(){super.onResume();resumed=true;publishStatus();}
     @Override protected void onPause(){resumed=false;super.onPause();}
     @Override protected void onActivityResult(int r,int c,Intent d){super.onActivityResult(r,c,d);if(backupFiles!=null&&backupFiles.onResult(r,c,d))return;if(r==42&&chooser!=null){chooser.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(c,d));chooser=null;}}
     @Override public void onBackPressed(){if(web.canGoBack())web.goBack();else super.onBackPressed();}
-    @Override protected void onDestroy(){if(PhoneService.instance!=null)PhoneService.instance.cancel();if(backupFiles!=null)backupFiles.close();if(chooser!=null){chooser.onReceiveValue(null);chooser=null;}if(web!=null)web.destroy();super.onDestroy();}
+    @Override protected void onDestroy(){
+        PhoneService.removeConnectionListener(connectionListener);
+        getContentResolver().unregisterContentObserver(grantObserver);
+        statusReply=null;
+        if(PhoneService.instance!=null)PhoneService.instance.cancel();
+        if(backupFiles!=null)backupFiles.close();
+        if(chooser!=null){chooser.onReceiveValue(null);chooser=null;}
+        if(web!=null)web.destroy();
+        super.onDestroy();
+    }
 }

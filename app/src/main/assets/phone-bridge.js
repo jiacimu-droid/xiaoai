@@ -2,12 +2,70 @@
 'use strict';
 const bridge=g.PhoneNative;
 if(!bridge||typeof bridge.postMessage!=='function')return;
-let seq=0, status={enabled:false,connected:false};const pending=new Map();
-bridge.onmessage=function(e){try{const m=JSON.parse(e.data);const p=pending.get(m.id);if(!p)return;pending.delete(m.id);clearTimeout(p.timer);p.resolve(m.result);}catch(_){}};
-function rpc(action,args){return new Promise(resolve=>{const id=String(++seq),timer=setTimeout(()=>{pending.delete(id);resolve({ok:false,uncertain:true,why:'原生操作未回報，請先觀察，不要直接重試',screen:''});},15000);pending.set(id,{resolve,timer});try{bridge.postMessage(JSON.stringify({id,command:Object.assign({},args||{},{action})}));}catch(e){clearTimeout(timer);pending.delete(id);resolve({ok:false,why:'無法連接 Android',screen:''});}});}
-async function refresh(){const r=await rpc('status');status={enabled:r.enabled===true,connected:r.connected===true};const t=document.getElementById('xaNativeTg');if(t){t.classList.toggle('on',status.enabled);t.setAttribute('aria-checked',String(status.enabled));}const label=document.getElementById('xaNativeStatus');if(label)label.textContent=status.enabled?'已授權':'未授權';return status;}
+let seq=0,status=null,toggling=false;
+const pending=new Map();
+bridge.onmessage=function(e){
+ try{
+  const m=JSON.parse(e.data);
+  if(m.event==='accessibility_status'){acceptStatus(m.result);return;}
+  const p=pending.get(m.id);if(!p)return;
+  pending.delete(m.id);clearTimeout(p.timer);p.resolve(m.result);
+ }catch(_){}
+};
+function rpc(action,args){return new Promise(resolve=>{
+ const id=String(++seq),timer=setTimeout(()=>{
+  pending.delete(id);resolve({ok:false,uncertain:true,why:'原生操作未回報，請先觀察，不要直接重試',screen:''});
+ },action==='status'?2500:15000);
+ pending.set(id,{resolve,timer});
+ try{bridge.postMessage(JSON.stringify({id,command:Object.assign({},args||{},{action})}));}
+ catch(e){clearTimeout(timer);pending.delete(id);resolve({ok:false,why:'無法連接 Android',screen:''});}
+});}
+function renderStatus(failed){
+ const toggle=document.getElementById('xaNativeTg');
+ if(toggle&&status){toggle.classList.toggle('on',status.enabled);toggle.setAttribute('aria-checked',String(status.enabled));}
+ const label=document.getElementById('xaNativeStatus');
+ if(label)label.textContent=failed?'暫時無法核對無障礙狀態':!status?'正在核對授權…':
+   status.connected?'已授權 · 已連接':status.enabled?'系統已授權 · 服務未連接':'未授權';
+}
+function acceptStatus(result){
+ if(!result||result.ok!==true||typeof result.enabled!=='boolean'||typeof result.connected!=='boolean')return null;
+ if(status&&Number.isFinite(result.revision)&&result.revision<status.revision)return status;
+ status={ok:true,enabled:result.enabled,connected:result.connected,revision:result.revision};
+ renderStatus(false);return status;
+}
+async function refresh(){
+ const previous=status;
+ const next=acceptStatus(await rpc('status'));
+ if(next)return next;
+ if(status&&status!==previous)return status;
+ renderStatus(true);return {ok:false};
+}
+function unavailable(s){
+ if(!s.ok)return '暫時無法核對無障礙狀態，請稍後重試。';
+ if(s.enabled)return '系統已授權，但無障礙服務還沒連接。點「授權無障礙」可重新打開系統設置。';
+ return '無障礙未授權，請在系統設置開啟「小愛機 · 手機操作」。';
+}
 g.xaNativeRefresh=refresh;
-g.xaNativeToggle=async function(){await refresh();await rpc(status.enabled?'disable':'authorize');await refresh();};
+g.xaNativeUnavailable=unavailable;
+g.xaNativeWaitForConnection=async function(){
+ let current=await refresh();
+ for(let retry=0;retry<3&&current.ok&&current.enabled&&!current.connected;retry++){
+  await new Promise(resolve=>setTimeout(resolve,350));
+  current=await refresh();
+ }
+ return current;
+};
+g.xaNativeToggle=async function(){
+ if(toggling)return;toggling=true;
+ const turningOff=status?.connected===true;
+ try{
+  const current=await refresh();
+  if(!current.ok){toast(unavailable(current));return;}
+  if(current.connected&&!turningOff)return;
+  const result=await rpc(current.connected?'disable':'authorize');
+  if(!acceptStatus(result)&&result?.why)toast(result.why);
+ }finally{toggling=false;}
+};
 g.xaNativeCancel=function(){return rpc('cancel');};
 function lockSettings(){
  const row=document.getElementById('xaNativeRow');
@@ -42,9 +100,10 @@ g.xaClearAppLocks=async function(){
 };
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',lockSettings);
 else lockSettings();
-g.__xaAct=async function(action,args){const s=await refresh();if(!s.enabled)return {ok:false,why:'無障礙未授權，請在設置開啟',screen:''};return rpc(action,args);};
+g.__xaAct=async function(action,args){const s=await refresh();if(!s.connected)return {ok:false,why:unavailable(s),screen:''};return rpc(action,args);};
 if(typeof module!=='undefined')module.exports={rpc,refresh};
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',refresh);else refresh();
+function initStatus(){renderStatus(false);refresh();}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initStatus);else initStatus();
 })(typeof window!=='undefined'?window:globalThis);
 
 /* Real phone requests must not be answered by the virtual-component chat lane. */
@@ -128,9 +187,9 @@ g.xaTaskEntry=function(c,txt){
      else schedule(c);
      return;
    }
-   const status=await g.xaNativeRefresh();
+   const status=await g.xaNativeWaitForConnection();
    if(latest(c)!==message)return;
-   if(!status.enabled){report(c,'还没有连接无障碍服务，请先在设置中授权。');return;}
+   if(!status.connected){report(c,g.xaNativeUnavailable(status));return;}
    if(!xaTaskOn(c)){report(c,'无障碍已连接。手机操作的总开关或这个角色的办事开关已关闭。');return;}
    if(Object.keys(XA_LIVE).length){report(c,'还有一个手机任务正在执行，请先结束它。');return;}
    xaStart(c,String(txt),String(txt));

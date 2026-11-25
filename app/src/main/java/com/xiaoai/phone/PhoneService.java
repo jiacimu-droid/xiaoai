@@ -18,11 +18,13 @@ import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
 import org.json.JSONObject;
 import java.util.*;
+import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.function.Consumer;
 
 /** Operates on the foreground application selected by the active phone task. */
 public final class PhoneService extends AccessibilityService {
     static volatile PhoneService instance;
+    private static final Set<Runnable> CONNECTION_LISTENERS = new CopyOnWriteArraySet<>();
     private final Handler h=new Handler(Looper.getMainLooper());
     private String allowed=""; private long until=0, generation=0, observedAt=0;
     private boolean busy=false;
@@ -32,13 +34,28 @@ public final class PhoneService extends AccessibilityService {
     private AppLocks appLocks;
     static JSONObject json(Object... kv){JSONObject o=new JSONObject();try{for(int i=0;i<kv.length;i+=2)o.put((String)kv[i],kv[i+1]);}catch(Exception ignored){}return o;}
     static JSONObject result(boolean ok,String why,String screen){return json("ok",ok,"why",why,"screen",screen);}
-    @Override protected void onServiceConnected(){instance=this;if(appLocks!=null)appLocks.close();appLocks=new AppLocks(this);appLocks.inspect();}
+    static void addConnectionListener(Runnable listener) { CONNECTION_LISTENERS.add(listener); }
+    static void removeConnectionListener(Runnable listener) { CONNECTION_LISTENERS.remove(listener); }
+    private static void notifyConnection() { for (Runnable listener : CONNECTION_LISTENERS) listener.run(); }
+    @Override protected void onServiceConnected(){
+        super.onServiceConnected();
+        if(appLocks!=null)appLocks.close();
+        appLocks=new AppLocks(this);
+        instance=this;
+        notifyConnection();
+        appLocks.inspect();
+    }
     @Override public void onAccessibilityEvent(AccessibilityEvent e){if(appLocks!=null&&e!=null)appLocks.onWindow(e);}
     @Override public void onInterrupt(){cancel();}
-    @Override public boolean onUnbind(Intent i){cancel();if(appLocks!=null)appLocks.close();if(instance==this)instance=null;return super.onUnbind(i);}
-    @Override public void onDestroy(){cancel();if(appLocks!=null)appLocks.close();if(instance==this)instance=null;super.onDestroy();}
+    @Override public boolean onUnbind(Intent i){disconnect();return super.onUnbind(i);}
+    @Override public void onDestroy(){disconnect();super.onDestroy();}
+    private void disconnect(){
+        cancel();
+        if(appLocks!=null)appLocks.close();
+        if(instance==this){instance=null;notifyConnection();}
+    }
     void cancel(){generation++;allowed="";until=0;observedAt=0;busy=false;clearDraft();submitted=false;}
-    void revoke(){cancel();if(appLocks!=null){appLocks.command(json("action","clear_app_locks"));appLocks.close();}if(instance==this)instance=null;disableSelf();}
+    void revoke(){if(appLocks!=null)appLocks.command(json("action","clear_app_locks"));disconnect();disableSelf();}
     JSONObject appLockCommand(JSONObject command){return appLocks==null?result(false,"无障碍服务尚未连接",""):appLocks.command(command);}
     private void clearDraft(){draft="";draftWindow=-1;}
     static final class Target {final String pkg,label;Target(String p,String l){pkg=p;label=l;}}

@@ -1,14 +1,63 @@
 const {test}=require('node:test');const assert=require('node:assert/strict');const vm=require('node:vm');const fs=require('node:fs');
 const js=fs.readFileSync('app/src/main/assets/phone-bridge.js','utf8');
-function env(enabled){const calls=[];const window={PhoneNative:{postMessage(raw){const m=JSON.parse(raw);calls.push(m.command);queueMicrotask(()=>this.onmessage({data:JSON.stringify({id:m.id,result:m.command.action==='status'?{ok:true,enabled,connected:enabled}:{ok:true,why:'receipt',screen:'actual nodes'}})}));}}};vm.runInNewContext(js,{window,document:{readyState:'loading',addEventListener(){},getElementById(){return null}},setTimeout,clearTimeout,Map,JSON});return {window,calls};}
+function env(initial, statusReply){
+ const calls=[],messages=[],label={textContent:''};
+ const toggle={on:false,classList:{toggle(_cls,on){toggle.on=on;}},setAttribute(){}};
+ let state=typeof initial==='boolean'?{ok:true,enabled:initial,connected:initial}:initial;
+ const channel={postMessage(raw){
+  const m=JSON.parse(raw);calls.push(m.command);
+  const result=m.command.action==='status'?state:{ok:true,why:'receipt',screen:'actual nodes'};
+  const send=()=>this.onmessage({data:JSON.stringify({id:m.id,result})});
+  if(m.command.action==='status'&&statusReply)statusReply(send);else queueMicrotask(send);
+ }};
+ const window={PhoneNative:channel};
+ const document={readyState:'loading',addEventListener(){},getElementById(id){return id==='xaNativeStatus'?label:id==='xaNativeTg'?toggle:null;}};
+ vm.runInNewContext(js,{window,document,toast:s=>messages.push(s),setTimeout,clearTimeout,Map,JSON});
+ return {window,calls,label,toggle,messages,push(next){
+  state=next;channel.onmessage({data:JSON.stringify({event:'accessibility_status',result:next})});
+ }};
+}
 test('disabled bridge refuses action',async()=>{const {window,calls}=env(false);const r=await window.__xaAct('swipe',{});assert.equal(r.ok,false);assert.equal(calls.length,1);});
 test('enabled bridge routes action and real reply',async()=>{const {window,calls}=env(true);const r=await window.__xaAct('swipe',{startX:.5});assert.equal(r.screen,'actual nodes');assert.equal(calls[1].action,'swipe');assert.equal(calls[1].startX,.5);});
+test('a grant that is waiting for Android to bind stays enabled and opens settings',async()=>{
+ const {window,calls,label,toggle}=env({ok:true,enabled:true,connected:false,revision:1});
+ const result=await window.__xaAct('swipe',{});
+ assert.equal(result.ok,false);assert.match(result.why,/系統已授權/);
+ assert.equal(label.textContent,'系統已授權 · 服務未連接');assert.equal(toggle.on,true);
+ await window.xaNativeToggle();
+ assert.deepEqual(calls.map(c=>c.action),['status','status','authorize']);
+});
+test('a tap on the pending grant cannot switch off a service that just connected',async()=>{
+ const {window,calls,push}=env({ok:true,enabled:true,connected:false,revision:1});
+ await window.xaNativeRefresh();
+ const tap=window.xaNativeToggle();
+ push({ok:true,enabled:true,connected:true,revision:2});
+ await tap;
+ assert.deepEqual(calls.map(c=>c.action),['status','status']);
+});
+test('a delayed status reply cannot overwrite a newer connection or revocation',async()=>{
+ let send;
+ const {window,label,toggle,push}=env({ok:true,enabled:true,connected:false,revision:1},reply=>{send=reply;});
+ const initial=window.xaNativeRefresh();
+ push({ok:true,enabled:true,connected:true,revision:2});
+ assert.equal(label.textContent,'已授權 · 已連接');
+ send();assert.equal((await initial).connected,true);
+ push({ok:true,enabled:false,connected:false,revision:3});
+ assert.equal(label.textContent,'未授權');assert.equal(toggle.on,false);
+});
+test('unavailable bridge status is not displayed as a revoked grant',async()=>{
+ const {window,label,calls}=env({ok:false});
+ const result=await window.__xaAct('open_app',{app:'QQ'});
+ assert.match(label.textContent,/無法核對/);assert.match(result.why,/無法核對/);
+ assert.deepEqual(calls.map(c=>c.action),['status']);
+});
 test('HTML uses original settings and task bridge',()=>{const h=fs.readFileSync('app/src/main/assets/index.html','utf8');assert.match(h,/id="xaNativeTg"/);assert.match(h,/var XA_ACTS=\[[^\]]*'swipe'/);assert.match(h,/await br\(a,args\)/);assert.match(h,/src="phone-bridge.js"/);});
 
-function routingEnv({enabled=true,role=true,decision='phone',request='打开我的QQ',guess=true}={}){
+function routingEnv({enabled=true,role=true,decision='phone',request='打开我的QQ',guess=true,connectedAfterReads=1}={}){
  const c={id:'role1',msgs:[{role:'u',type:'text',content:request}]}, events=[];
- const g={PhoneNative:{postMessage(raw){const m=JSON.parse(raw);queueMicrotask(()=>this.onmessage({data:JSON.stringify({id:m.id,result:{ok:true,enabled,connected:enabled}})}));}},xaTaskEntry(){events.push('legacy');},scheduleAutoReply(){events.push('chat');},respond(){events.push('manual-chat');},buildSys(){return 'persona';},xaSkipTask(){}};
- const sandbox={window:g,document:{readyState:'loading',addEventListener(){},getElementById(){return null}},setTimeout,clearTimeout,Map,JSON,cur:c,xaFeedAnswer:()=>false,xaTaskGuess:()=>guess,xaNow:()=>'',save(){},chatVisible:()=>false,renderMsgs(){},activeApi:()=>({}),sendChatRaw:async()=>JSON.stringify({route:decision}),xaTaskOn:()=>role,XA_LIVE:{},xaAskStart(){events.push('real-task-confirm');},xaStart(){events.push('real-task-start');},replyModeOf:()=> 'auto',v1215Char:()=>c};
+ let reads=0;
+ const g={PhoneNative:{postMessage(raw){const m=JSON.parse(raw);const connected=enabled&&++reads>=connectedAfterReads;queueMicrotask(()=>this.onmessage({data:JSON.stringify({id:m.id,result:{ok:true,enabled,connected}})}));}},xaTaskEntry(){events.push('legacy');},scheduleAutoReply(){events.push('chat');},respond(){events.push('manual-chat');},buildSys(){return 'persona';},xaSkipTask(){}};
+ const sandbox={window:g,document:{readyState:'loading',addEventListener(){},getElementById(){return null}},setTimeout(fn,ms){if(ms===350){queueMicrotask(fn);return 0;}return setTimeout(fn,ms);},clearTimeout,Map,JSON,cur:c,xaFeedAnswer:()=>false,xaTaskGuess:()=>guess,xaNow:()=>'',save(){},chatVisible:()=>false,renderMsgs(){},activeApi:()=>({}),sendChatRaw:async()=>JSON.stringify({route:decision}),xaTaskOn:()=>role,XA_LIVE:{},xaAskStart(){events.push('real-task-confirm');},xaStart(){events.push('real-task-start');},replyModeOf:()=> 'auto',v1215Char:()=>c};
  vm.runInNewContext(js,sandbox);
  return {g,c,events};
 }
@@ -16,6 +65,11 @@ const settle=()=>new Promise(r=>setImmediate(r));
 test('real QQ command suppresses ordinary replies and starts without a second confirmation',async()=>{
  const {g,c,events}=routingEnv();g.xaTaskEntry(c,c.msgs[0].content);g.scheduleAutoReply(c);g.respond();await settle();
  assert.deepEqual(events,['real-task-start']);assert.match(g.buildSys(c),/真实 QQ/);
+});
+test('the first command waits briefly for a just-enabled service',async()=>{
+ const {g,c,events}=routingEnv({connectedAfterReads:3});
+ g.xaTaskEntry(c,c.msgs[0].content);await settle();
+ assert.deepEqual(events,['real-task-start']);
 });
 test('missing role permission never fabricates a completed action',async()=>{
  const {g,c,events}=routingEnv({role:false});g.xaTaskEntry(c,c.msgs[0].content);g.scheduleAutoReply(c);await settle();
