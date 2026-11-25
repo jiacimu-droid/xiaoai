@@ -1,7 +1,17 @@
 (function(g){
 'use strict';
 const bridge=g.PhoneNative;
-if(!bridge||typeof bridge.postMessage!=='function')return;
+if(!bridge||typeof bridge.postMessage!=='function'){
+ const unavailable=()=> '當前 WebView 未提供原生橋接，請在設置打開「連接診斷」；不能據此判定未授權。';
+ const fail=async()=>({ok:false,connected:false,why:unavailable()});
+ g.xaNativeRefresh=fail;g.xaNativeWaitForConnection=fail;g.xaNativeUnavailable=unavailable;
+ g.xaPhoneDiagnostics=fail;
+ g.__xaAct=fail;
+ g.xaNativeToggle=async()=>{if(g.location?.origin==='https://appassets.androidplatform.net')g.location.href='/accessibility-diagnostics';};
+ const show=()=>{const label=document.getElementById('xaNativeStatus');if(label)label.textContent='原生橋接不可用 · 授權未知';};
+ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',show);else show();
+ return;
+}
 let seq=0,status=null,toggling=false;
 const pending=new Map();
 bridge.onmessage=function(e){
@@ -22,15 +32,16 @@ function rpc(action,args){return new Promise(resolve=>{
 });}
 function renderStatus(failed){
  const toggle=document.getElementById('xaNativeTg');
- if(toggle&&status){toggle.classList.toggle('on',status.enabled);toggle.setAttribute('aria-checked',String(status.enabled));}
+ if(toggle&&status&&status.grantKnown){toggle.classList.toggle('on',status.enabled);toggle.setAttribute('aria-checked',String(status.enabled));}
+ if(toggle&&status&&!status.grantKnown)toggle.setAttribute('aria-checked','mixed');
  const label=document.getElementById('xaNativeStatus');
  if(label)label.textContent=failed?'暫時無法核對無障礙狀態':!status?'正在核對授權…':
-   status.connected?'已授權 · 已連接':status.enabled?'系統已授權 · 服務未連接':'未授權';
+   status.connected?'已授權 · 已連接':status.enabled?'系統已授權 · 服務未連接':!status.grantKnown?'授權狀態未知 · 查看連接診斷':'未授權';
 }
 function acceptStatus(result){
  if(!result||result.ok!==true||typeof result.enabled!=='boolean'||typeof result.connected!=='boolean')return null;
  if(status&&Number.isFinite(result.revision)&&result.revision<status.revision)return status;
- status={ok:true,enabled:result.enabled,connected:result.connected,revision:result.revision};
+ status={ok:true,enabled:result.enabled,connected:result.connected,grantKnown:result.grantKnown!==false||result.connected,grantConflict:result.grantConflict===true,revision:result.revision};
  renderStatus(false);return status;
 }
 async function refresh(){
@@ -43,6 +54,7 @@ async function refresh(){
 function unavailable(s){
  if(!s.ok)return '暫時無法核對無障礙狀態，請稍後重試。';
  if(s.enabled)return '系統已授權，但無障礙服務還沒連接。請在設置打開「連接診斷」查看停在哪一步。';
+ if(s.grantKnown===false)return '無法確認系統授權，請查看「連接診斷」，並非已確認未授權。';
  return '無障礙未授權，請在系統設置開啟「小愛機 · 手機操作」。';
 }
 g.xaNativeRefresh=refresh;
@@ -50,7 +62,7 @@ g.xaPhoneDiagnostics=()=>rpc('accessibility_diagnostics_report');
 g.xaNativeUnavailable=unavailable;
 g.xaNativeWaitForConnection=async function(){
  let current=await refresh();
- for(let retry=0;retry<3&&current.ok&&current.enabled&&!current.connected;retry++){
+ for(let retry=0;retry<3&&current.ok&&(current.enabled||current.grantKnown===false)&&!current.connected;retry++){
   await new Promise(resolve=>setTimeout(resolve,350));
   current=await refresh();
  }

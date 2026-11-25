@@ -70,9 +70,10 @@ public final class MainActivity extends Activity {
             backupFiles.bind(web,ORIGIN);
             WebViewCompat.addWebMessageListener(web,"PhoneNative",Collections.singleton(ORIGIN),(view,msg,origin,main,reply)->{
                 if(!main||!isAppOrigin(origin))return;
+                String requestId=null;
                 try{
                     String raw=msg.getData(); if(raw==null||raw.length()>12000)return;
-                    JSONObject req=new JSONObject(raw); String id=req.getString("id"); JSONObject command=req.getJSONObject("command");
+                    JSONObject req=new JSONObject(raw); String id=req.getString("id"); requestId=id; JSONObject command=req.getJSONObject("command");
                     java.util.function.Consumer<JSONObject> respond=r->runOnUiThread(()->{try{reply.postMessage(PhoneService.json("id",id,"result",r).toString());}catch(Exception ignored){}});
                     String action=command.optString("action");
                     if("status".equals(action)){statusReply=reply;respond.accept(status());return;}
@@ -98,9 +99,12 @@ public final class MainActivity extends Activity {
                         respond.accept(status());return;
                     }
                     if(service==null){
-                        String why=AccessibilityGrant.isEnabled(this)
+                        int grant=AccessibilityGrant.inspect(this).state();
+                        String why=grant==GrantEvidence.YES
                                 ?"系統已授權，無障礙服務未連接。可在設置查看「連接診斷」。"
-                                :"請先在系統設置開啟「小愛機 · 手機操作」";
+                                :grant==GrantEvidence.UNKNOWN
+                                ?"無法確認系統授權，請查看「連接診斷」，並非已確認未授權。"
+                                :"系統未檢測到小愛機的授權，請查看「連接診斷」或系統設置。";
                         respond.accept(PhoneService.result(false,why,""));return;
                     }
                     if("cancel".equals(action)){service.cancel();respond.accept(PhoneService.result(true,"已停止", ""));return;}
@@ -115,11 +119,21 @@ public final class MainActivity extends Activity {
                         service.launch(target,respond);return;
                     }
                     service.request(command,respond);
-                }catch(Exception ignored){}
+                }catch(RuntimeException | org.json.JSONException | LinkageError error){
+                    AccessibilityDiagnostics.fault(this,"原生橋接命令處理",error);
+                    if(requestId!=null){
+                        try{reply.postMessage(PhoneService.json("id",requestId,"result",PhoneService.result(false,"原生橋接異常，請匯出連接診斷","")).toString());}
+                        catch(RuntimeException ignored){}
+                    }
+                }
             });
         }
-        getContentResolver().registerContentObserver(
-                Settings.Secure.getUriFor(Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES),false,grantObserver);
+        try {
+            getContentResolver().registerContentObserver(
+                    Settings.Secure.getUriFor(Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES),false,grantObserver);
+            getContentResolver().registerContentObserver(
+                    Settings.Secure.getUriFor(Settings.Secure.ACCESSIBILITY_ENABLED),false,grantObserver);
+        } catch(RuntimeException error){AccessibilityDiagnostics.fault(this,"監聽無障礙授權",error);}
         PhoneService.addConnectionListener(connectionListener);
         web.loadUrl(ORIGIN+"/assets/index.html");
     }
@@ -130,13 +144,15 @@ public final class MainActivity extends Activity {
     }
     private JSONObject status(){
         boolean connected=PhoneService.instance!=null;
-        boolean enabled=connected||AccessibilityGrant.isEnabled(this);
-        return PhoneService.json("ok",true,"enabled",enabled,"connected",connected,"revision",++statusRevision);
+        AccessibilityGrant.Snapshot grant=AccessibilityGrant.inspect(this);
+        int state=connected?GrantEvidence.YES:grant.state();
+        return PhoneService.json("ok",true,"enabled",state==GrantEvidence.YES,"grantKnown",state!=GrantEvidence.UNKNOWN,
+                "grantConflict",grant.conflict(),"connected",connected,"revision",++statusRevision);
     }
     private void publishStatus(){
         if(statusReply==null)return;
         try{statusReply.postMessage(PhoneService.json("event","accessibility_status","result",status()).toString());}
-        catch(IllegalStateException ignored){statusReply=null;}
+        catch(RuntimeException error){statusReply=null;AccessibilityDiagnostics.fault(this,"網頁狀態推送",error);}
     }
     @Override protected void onResume(){
         super.onResume();resumed=true;publishStatus();

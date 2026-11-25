@@ -174,3 +174,18 @@ test('application locking requires a user supervision task and a real duration',
  await g.xaExec(lock,c,st);
  assert.deepEqual(calls,['status','lock_app']);assert.equal(lock.steps[1].ok,true);
 });
+
+test('unknown grant is not reported as revoked and cannot run actions',async()=>{
+ const {window,label,calls}=env({ok:true,enabled:false,connected:false,grantKnown:false,revision:1});
+ const result=await window.__xaAct('swipe',{});
+ assert.equal(result.ok,false);assert.match(label.textContent,/未知/);assert.match(result.why,/無法確認/);
+ assert.deepEqual(calls.map(c=>c.action),['status']);
+});
+test('missing WebView bridge has a usable status and diagnostic fallback',async()=>{
+ const window={location:{origin:'https://appassets.androidplatform.net'}};
+ const label={textContent:''};
+ const document={readyState:'loading',addEventListener(){},getElementById:id=>id==='xaNativeStatus'?label:null};
+ vm.runInNewContext(js,{window,document});
+ const result=await window.xaNativeWaitForConnection();assert.equal(result.connected,false);assert.match(result.why,/原生橋接/);
+ await window.xaNativeToggle();assert.equal(window.location.href,'/accessibility-diagnostics');
+});

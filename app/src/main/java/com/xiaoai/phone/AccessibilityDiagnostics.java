@@ -87,12 +87,17 @@ final class AccessibilityDiagnostics {
 
         String stage = saved.getString("stage", "");
         boolean connected = PhoneService.instance != null;
-        boolean granted = connected || AccessibilityGrant.isEnabled(context);
+        AccessibilityGrant.Snapshot grant = AccessibilityGrant.inspect(context);
+        int grantState = connected ? GrantEvidence.YES : grant.state();
         StringBuilder report = new StringBuilder("小愛機無障礙診斷\n")
                 .append("版本：").append(version).append('\n')
                 .append("系統：Android ").append(Build.VERSION.RELEASE).append(" / API ").append(Build.VERSION.SDK_INT)
                 .append(" · ").append(Build.MANUFACTURER).append(' ').append(Build.MODEL).append('\n')
-                .append("系統授權：").append(granted ? "已開啟" : "未開啟").append('\n')
+                .append("系統授權：").append(grantState==GrantEvidence.YES?"已開啟":grantState==GrantEvidence.NO?"未開啟":"無法確認").append('\n')
+                .append("Secure 授權清單包含本服務：").append(GrantEvidence.label(grant.secure)).append("（").append(grant.secureShape).append("）").append('\n')
+                .append("AccessibilityManager 啟用清單包含本服務：").append(GrantEvidence.label(grant.manager)).append('\n')
+                .append("系統無障礙總開關：").append(GrantEvidence.label(grant.global)).append('\n')
+                .append("授權來源不一致：").append(yesNo(grant.conflict())).append('\n')
                 .append("系統已識別本服務：").append(installed).append('\n')
                 .append("系統服務查詢列為啟用：").append(systemList).append('\n')
                 .append("運行連接：").append(connected ? "已連接" : "未連接").append('\n')
@@ -100,6 +105,13 @@ final class AccessibilityDiagnostics {
                 .append("首次收到系統事件：").append(time(saved.getLong("firstEventAt",0))).append('\n')
                 .append("網頁原生橋接：").append(webBridgeSupported ? "受支持" : "不受支持")
                 .append(pageReported ? "，頁面已查詢狀態" : "，本次未觀察到頁面查詢");
+        report.append("\n診斷分類：").append(connected?"CONNECTED":grantState==GrantEvidence.YES?"GRANTED_NOT_BOUND":grantState==GrantEvidence.NO?"GRANT_NOT_DETECTED":"GRANT_UNKNOWN");
+        if(!grant.secureError.isEmpty())report.append("\nSecure 讀取異常：").append(grant.secureError);
+        if(!grant.managerError.isEmpty())report.append("\nManager 讀取異常：").append(grant.managerError);
+        if(!grant.globalError.isEmpty())report.append("\n總開關讀取異常：").append(grant.globalError);
+        if(grant.conflict())report.append("\n兩個系統授權來源不一致，請勿將此情況當成已撤銷授權。");
+        if(!connected&&grantState==GrantEvidence.YES)report.append("\n系統有授權證據，但尚無當前進程的服務連接證據；請檢查上方生命週期及系統退出原因。");
+        if(!webBridgeSupported)report.append("\n當前 WebView 不支持原生消息橋接；請更新系統 WebView（若系統提供更新）並保留本原生診斷。");
         report.append("\n本次進程是否為最近服務進程：").append(yesNo(saved.getInt("pid",-1)==Process.myPid()));
         try {
             PackageInfo webView=android.webkit.WebView.getCurrentWebViewPackage();

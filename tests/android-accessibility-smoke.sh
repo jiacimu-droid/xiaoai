@@ -91,6 +91,21 @@ wait_for_connection 'The existing grant reconnected after an APK replacement and
 adb shell am start -W -n "$package/.MainActivity"
 has_connection
 
+# Verify the customer-visible native report, not only the service preferences.
+check_report() {
+    local expected=$1
+    adb shell am start -W -n "$package/.AccessibilityDiagnosticsActivity" >/dev/null
+    for _ in {1..4}; do
+        adb shell uiautomator dump /sdcard/xiaoai-diagnostics.xml >/dev/null 2>&1 || continue
+        if adb shell cat /sdcard/xiaoai-diagnostics.xml | grep -Fq "$expected"; then return 0; fi
+        sleep 1
+    done
+    echo "Native diagnostics missing $expected" >&2
+    return 1
+}
+check_report 'CONNECTED'
+
 adb shell settings --user current delete secure enabled_accessibility_services
 adb shell settings --user current put secure accessibility_enabled 0
 wait_for 'Android revocation disconnected the service.' has_disconnected
+check_report 'GRANT_NOT_DETECTED'

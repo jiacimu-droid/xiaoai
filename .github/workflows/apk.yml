@@ -70,7 +70,13 @@ jobs:
           fi
           test -f "$sdk_root/platforms/android-35/android.jar"
           test -x "$sdk_root/build-tools/35.0.0/apksigner"
-      - run: node --check app/src/main/assets/phone-bridge.js && node --test tests/phone-bridge.test.cjs
+      - name: Verify bridge and runtime diagnostics
+        run: node --check app/src/main/assets/phone-bridge.js && node --test tests/*.test.cjs
+      - name: Verify Huawei grant evidence reconciliation
+        run: |
+          out="$(mktemp -d)"
+          javac -d "$out" app/src/main/java/com/xiaoai/phone/GrantEvidence.java tests/GrantEvidenceTest.java
+          java -cp "$out" com.xiaoai.phone.GrantEvidenceTest
       - name: Check fixed private-use signing key
         run: |
           test "$(git hash-object ci/test-signing.jks)" = "c982bfd903de2c03fe9a76e60b3d2696336f5260"
