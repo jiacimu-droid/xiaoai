@@ -313,7 +313,7 @@ function v1217PeekRows(){
     for(i=L.length-1;i>=0;i--){var kk=L[i].k;if(kk==='err'||kk==='cerr'||kk==='promise'||kk==='iframe'){lastErr=L[i];break}}
     var out='<div class="pc-row'+(bad?' warn':'')+'"><div class="pc-t">運行日誌</div><div class="pc-s">'
       +esc('共 '+L.length+' 條 · 腳本報錯 '+bad+' 次 · 接口失敗 '+st.apiErr+' 次 · 辦事卡住 '+st.xaFail+' 單')
-      +(lastErr?(' · 最近一次：'+xaCut(lastErr.m,44)):'')
+      +(lastErr?esc(' · 最近一次：'+xaCut(lastErr.m,44)):'')
       +'</div>'
       +'<span class="pc-a" onclick="closeModal();xaLogOpen()">打開</span>'
       +'</div>';

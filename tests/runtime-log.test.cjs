@@ -13,6 +13,8 @@ test('the report includes early script errors and native diagnostics without req
   DB:{get:(k,d)=>saved.get(k)??d,set:(k,v)=>{saved.set(k,v);return true;}},
   console:{error(){},warn(){}},document:{getElementById:()=>null,createElement:()=>({}),
    querySelectorAll:()=>[],head:{appendChild(){}},addEventListener(){}},
+  esc:value=>String(value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'),
+  xaCut:(value,count)=>String(value).slice(0,count),
   addEventListener:(k,h)=>{handlers[k]=h;},setTimeout:()=>1,
   xaPhoneDiagnostics:async()=>({ok:true,report:'運行連接：已連接'}),
   sendChatRaw:async()=>{throw new Error('API 401: bearer sample-key');},
@@ -31,4 +33,8 @@ test('the report includes early script errors and native diagnostics without req
  assert.match(report,/HTTP 401/);assert.match(report,/tap_text/);
  assert.match(report,/運行連接：已連接/);
  assert.doesNotMatch(report,/private message|secret=yes|my-secret-key|sample-key|private task|private recipient/);
+ c.xaLog('err','診斷 <測試> & 註記','');
+ const summary=c.v1217PeekRows();
+ assert.match(summary,/最近一次：診斷 &lt;測試&gt; &amp; 註記/);
+ assert.doesNotMatch(summary,/<測試>/);
 });
