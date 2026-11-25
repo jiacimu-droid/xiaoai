@@ -1,0 +1,55 @@
+name: Build XiaoAi APK
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'tests/**'
+      - 'ci/**'
+      - '*.gradle'
+      - 'gradle.properties'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify source is present
+        run: test -f app/src/main/assets/index.html && test -f app/build.gradle
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - run: node --check app/src/main/assets/phone-bridge.js && node --test tests/phone-bridge.test.cjs
+      - run: gradle --no-daemon --stacktrace :app:assembleDebug
+      - name: Verify and stage APK
+        run: |
+          mkdir -p apk-artifacts
+          cp app/build/outputs/apk/debug/app-debug.apk apk-artifacts/XiaoAi.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose apk-artifacts/XiaoAi.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: XiaoAi-APK
+          path: apk-artifacts/*.apk
+          if-no-files-found: error
+      - name: Publish directly downloadable APK
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="apk-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          gh release create "$tag" apk-artifacts/*.apk --target "$GITHUB_SHA" --title "小爱机 APK #${GITHUB_RUN_NUMBER}" --notes "Android 测试版；来源提交 ${GITHUB_SHA}。"
