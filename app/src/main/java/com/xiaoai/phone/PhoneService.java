@@ -29,15 +29,17 @@ public final class PhoneService extends AccessibilityService {
     private String draft="";
     private int draftWindow=-1;
     private boolean submitted=false;
+    private AppLocks appLocks;
     static JSONObject json(Object... kv){JSONObject o=new JSONObject();try{for(int i=0;i<kv.length;i+=2)o.put((String)kv[i],kv[i+1]);}catch(Exception ignored){}return o;}
     static JSONObject result(boolean ok,String why,String screen){return json("ok",ok,"why",why,"screen",screen);}
-    @Override protected void onServiceConnected(){instance=this;}
-    @Override public void onAccessibilityEvent(AccessibilityEvent e){}
+    @Override protected void onServiceConnected(){instance=this;appLocks=new AppLocks(this);appLocks.inspect(null);}
+    @Override public void onAccessibilityEvent(AccessibilityEvent e){if(appLocks!=null&&e!=null)appLocks.onWindow(e);}
     @Override public void onInterrupt(){cancel();}
-    @Override public boolean onUnbind(Intent i){cancel();if(instance==this)instance=null;return super.onUnbind(i);}
-    @Override public void onDestroy(){cancel();if(instance==this)instance=null;super.onDestroy();}
+    @Override public boolean onUnbind(Intent i){cancel();if(appLocks!=null)appLocks.close();if(instance==this)instance=null;return super.onUnbind(i);}
+    @Override public void onDestroy(){cancel();if(appLocks!=null)appLocks.close();if(instance==this)instance=null;super.onDestroy();}
     void cancel(){generation++;allowed="";until=0;observedAt=0;busy=false;clearDraft();submitted=false;}
-    void revoke(){cancel();if(instance==this)instance=null;disableSelf();}
+    void revoke(){cancel();if(appLocks!=null){appLocks.command(json("action","clear_app_locks"));appLocks.close();}if(instance==this)instance=null;disableSelf();}
+    JSONObject appLockCommand(JSONObject command){return appLocks==null?result(false,"无障碍服务尚未连接",""):appLocks.command(command);}
     private void clearDraft(){draft="";draftWindow=-1;}
     static final class Target {final String pkg,label;Target(String p,String l){pkg=p;label=l;}}
     private boolean blockedPackage(String p){return p==null||p.isEmpty()||p.equals(getPackageName())||p.startsWith("com.android.")||p.startsWith("com.google.android.permissioncontroller")||p.contains("bank")||p.contains("alipay")||p.contains("wallet")||p.contains("password")||p.contains("authenticator");}
@@ -53,6 +55,7 @@ public final class PhoneService extends AccessibilityService {
     }
     void launch(Target t,Consumer<JSONObject> cb){
         if(busy){cb.accept(result(false,"另一動作尚未結束", ""));return;}
+        if(appLocks!=null&&appLocks.blocked(t.pkg)){cb.accept(result(false,"这个应用目前已锁定", ""));return;}
         cancel();if(instance!=this||locked()){cb.accept(result(false,"無障礙已關閉或手機已鎖定",""));return;}
         Intent i=getPackageManager().getLaunchIntentForPackage(t.pkg);if(i==null){cb.accept(result(false,"無法開啟 App",""));return;}
         allowed=t.pkg;until=SystemClock.elapsedRealtime()+180000;long g=generation;busy=true;
@@ -86,6 +89,7 @@ public final class PhoneService extends AccessibilityService {
     private boolean belongsToTarget(AccessibilityNodeInfo n){return n!=null&&n.getPackageName()!=null&&allowed.contentEquals(n.getPackageName());}
     private AccessibilityNodeInfo root(){
         if(instance!=this||locked()||SystemClock.elapsedRealtime()>until||allowed.isEmpty())return null;
+        if(appLocks!=null&&appLocks.blocked(allowed))return null;
         AccessibilityNodeInfo r=foregroundTarget();if(r==null)return null;
         if(sensitive(r,0,new int[]{0}))return null;
         return r;

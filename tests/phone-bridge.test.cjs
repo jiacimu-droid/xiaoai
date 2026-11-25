@@ -86,3 +86,28 @@ test('uncertain submission ends the task without clicking twice',async()=>{
  await g.xaExec(t,c,step);await g.xaExec(t,c,step);
  assert.deepEqual(calls,['status','publish_moments']);assert.equal(t.state,'fail');
 });
+
+test('explicit role supervision reaches native phone task routing',async()=>{
+ const {g,c,events}=routingEnv({request:'帮我锁住抖音，锁多久你决定',guess:false,decision:'chat'});
+ g.xaTaskEntry(c,c.msgs[0].content);await settle();
+ assert.deepEqual(events,['real-task-start']);
+});
+test('lock intents distinguish explicit supervision from opening an app',()=>{
+ const {g}=routingEnv();
+ assert.equal(g.xaPhoneLockIntent('帮我锁住抖音'),true);
+ assert.equal(g.xaPhoneLockIntent('今天你来决定怎么限制我用手机'),true);
+ assert.equal(g.xaPhoneLockIntent('帮我打开小红书'),false);
+ assert.equal(g.xaPhoneLockIntent('不要锁住抖音'),false);
+});
+test('application locking requires a user supervision task and a real duration',async()=>{
+ const {g,c,calls}=executionEnv();
+ const st={action:'lock_app',args:{app:'抖音',minutes:30}};
+ const ordinary={q:'打开抖音',steps:[],state:'run'};
+ await g.xaExec(ordinary,c,st);
+ assert.equal(ordinary.steps[0].ok,false);
+ const lock={q:'帮我锁住抖音',steps:[],state:'run'};
+ await g.xaExec(lock,c,{...st,args:{app:'抖音'}});
+ assert.equal(lock.steps[0].ok,false);
+ await g.xaExec(lock,c,st);
+ assert.deepEqual(calls,['status','lock_app']);assert.equal(lock.steps[1].ok,true);
+});

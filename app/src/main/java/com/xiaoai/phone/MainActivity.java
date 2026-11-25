@@ -54,6 +54,9 @@ public final class MainActivity extends Activity {
                     java.util.function.Consumer<JSONObject> respond=r->runOnUiThread(()->{try{reply.postMessage(PhoneService.json("id",id,"result",r).toString());}catch(Exception ignored){}});
                     String action=command.optString("action");
                     if("status".equals(action)){respond.accept(status());return;}
+                    if("app_lock_palette".equals(action)){
+                        AppLocks.savePalette(this,command);respond.accept(PhoneService.result(true,"",""));return;
+                    }
                     PhoneService service=PhoneService.instance;
                     if("disable".equals(action)){
                         if(service!=null)service.revoke();
@@ -65,6 +68,10 @@ public final class MainActivity extends Activity {
                     }
                     if(service==null){respond.accept(PhoneService.result(false,"請先授權無障礙", ""));return;}
                     if("cancel".equals(action)){service.cancel();respond.accept(PhoneService.result(true,"已停止", ""));return;}
+                    if("lock_app".equals(action)||"unlock_app".equals(action)||"app_locks".equals(action)||"clear_app_locks".equals(action)){
+                        if(!resumed){respond.accept(PhoneService.result(false,"请回到小爱机管理应用锁",""));return;}
+                        respond.accept(service.appLockCommand(command));return;
+                    }
                     if("open_app".equals(action)){
                         if(!resumed&&!service.hasTargetOnScreen()){respond.accept(PhoneService.result(false,"請回到小愛機，或切回此任務正在操作的 App", ""));return;}
                         PhoneService.Target target=service.resolve(command.optString("app"));

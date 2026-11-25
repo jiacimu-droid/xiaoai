@@ -9,6 +9,39 @@ async function refresh(){const r=await rpc('status');status={enabled:r.enabled==
 g.xaNativeRefresh=refresh;
 g.xaNativeToggle=async function(){await refresh();await rpc(status.enabled?'disable':'authorize');await refresh();};
 g.xaNativeCancel=function(){return rpc('cancel');};
+function lockSettings(){
+ const row=document.getElementById('xaNativeRow');
+ if(!row||typeof document.createElement!=='function')return;
+ const button=document.createElement('button');
+ button.type='button';button.className='btn full ghost';button.textContent='应用锁';
+ button.style.margin='0 0 12px';button.onclick=g.xaShowAppLocks;
+ row.insertAdjacentElement('afterend',button);
+ const syncPalette=()=>{
+   const style=getComputedStyle(document.documentElement);
+   const colors={};
+   for(const [key,variable] of Object.entries({surface:'--bg',ink:'--ink',muted:'--ink-soft',border:'--line'})){
+    let value=style.getPropertyValue(variable).trim();
+    if(/^#[0-9a-f]{3}$/i.test(value))value='#'+[...value.slice(1)].map(c=>c+c).join('');
+    if(/^#[0-9a-f]{6}$/i.test(value))colors[key]=value;
+   }
+   if(Object.keys(colors).length)rpc('app_lock_palette',colors);
+ };
+ syncPalette();
+ if(typeof MutationObserver==='function')new MutationObserver(syncPalette).observe(document.documentElement,{attributes:true,attributeFilter:['style','class','data-theme']});
+}
+g.xaShowAppLocks=async function(){
+ const result=await rpc('app_locks');
+ if(!result.ok){toast(result.why||'请先连接无障碍');return;}
+ const items=(result.locks||[]).map(lock=>'<div style="margin:8px 0">'+esc(lock.app)+' · '+esc(new Date(lock.until).toLocaleString())+' 解锁</div>').join('');
+ modal('<h3>应用锁</h3><div>'+ (items||'目前没有锁定的应用')+'</div>'+
+   (items?'<button type="button" class="btn full ghost" style="margin-top:14px" onclick="xaClearAppLocks()">解除全部</button>':'')+
+   '<button type="button" class="btn full" style="margin-top:8px" onclick="closeModal()">关闭</button>');
+};
+g.xaClearAppLocks=async function(){
+ const result=await rpc('clear_app_locks');toast(result.why);if(result.ok)g.xaShowAppLocks();
+};
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',lockSettings);
+else lockSettings();
 g.__xaAct=async function(action,args){const s=await refresh();if(!s.enabled)return {ok:false,why:'無障礙未授權，請在設置開啟',screen:''};return rpc(action,args);};
 if(typeof module!=='undefined')module.exports={rpc,refresh};
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',refresh);else refresh();
@@ -32,6 +65,16 @@ const outboundVerb='(?:发|發|发送|發送|发布|發布)(?:送)?';
 const directMoments=new RegExp('^'+commandPrefix+'(?:在微信)?'+outboundVerb+'(?:个|個|条|條|一条|一條|一下)?朋友圈');
 const directMessage=new RegExp('^'+commandPrefix+'(?:(?:用|在)(?:微信|QQ))?(?:(?:给|給).{1,32}?(?:发|發|说|說|回)|(?:回复|回覆).{1,32}|'+outboundVerb+'(?:个|個|条|條|一条|一條)?(?:消息|讯息|訊息|信息|私信)|(?:发|發)给.{1,32})','i');
 function compact(t){return String(t||'').replace(/\s+/g,'');}
+function lockIntent(t){
+ const request=compact(t);
+ if(/(?:不用|不必|不要|别|別)(?:再)?(?:帮我|幫我|替我)?(?:锁|鎖|限制)/.test(request))return false;
+ return /(?:锁定|鎖定|锁住|鎖住|锁应用|鎖應用|应用锁|應用鎖|解锁|解鎖|解除.{0,10}(?:锁|鎖)|(?:锁|鎖|限制|拦截|攔截).{0,18}(?:抖音|QQ|微信|小[红紅]书|游戏|遊戲|APP|应用|應用|用手机|用手機)|(?:监督|監督|管管).{0,10}(?:用手机|用手機|刷手机|刷手機))/i.test(request);
+}
+g.xaPhoneLockIntent=lockIntent;
+g.xaPhoneLockChange=t=>lockIntent(t)&&!/(?:状态|狀態|是否|有没有|有沒有|是什么|是什麼|教程|查一下|查询|查詢|帮我看看|幫我看看)/.test(compact(t));
+if(typeof XA_ACTS!=='undefined'){
+ for(const name of ['lock_app','unlock_app','app_locks'])if(!XA_ACTS.includes(name))XA_ACTS.push(name);
+}
 function outbound(t){const s=compact(t);return directMoments.test(s)?'publish_moments':directMessage.test(s)?'send_message':'';}
 function virtual(t){return /(?:(?:虚拟|虛擬|内置|內置)(?:的)?(?:QQ|微信|小爱机|小愛機)|QQ(?:装扮|裝扮)|^角色扮演)/i.test(t);}
 g.xaPhoneOutbound=outbound;
@@ -57,7 +100,7 @@ g.xaTaskEntry=function(c,txt){
  if(!c||!txt||c.blocked)return;
  if(xaFeedAnswer(c,txt)){route.set(c,{message:latest(c)});return;}
  const request=compact(txt),directive=request.split(/[：:]/,1)[0];
- const explicit=!virtual(directive)&&!/(?:会怎样|會怎樣|教程|怎么打开|怎麼打開|是什么意思|是什麼意思)/.test(directive)&&(directApp.test(request)||outbound(request));
+ const explicit=!virtual(directive)&&!/(?:会怎样|會怎樣|教程|怎么打开|怎麼打開|是什么意思|是什麼意思)/.test(directive)&&(directApp.test(request)||outbound(request)||lockIntent(request));
  if(!explicit&&!xaTaskGuess(txt))return;
  const message=latest(c);if(!message)return;
  if(held(c))return;
@@ -131,6 +174,7 @@ const modelOnly=async function(cfg,system,user){
 g.xaPhoneClassify=(cfg,msgs)=>modelOnly(cfg,msgs[0].content,msgs[1].content);
 g.xaTaskSys=function(t,c){
  const action=g.xaPhoneOutbound(t.q);
+ const canLock=g.xaPhoneLockIntent(t.q);
  const tools=[
    'open_app {"app":"应用名"}；screenshot {} 读取当前控件；capture_window {} 读取当前应用图片（Android 14+）。',
    'tap_text {"text":"确切控件名"}；tap_xy {"x":0.5,"y":0.5}；long_press {"x":0.5,"y":0.5}；back {}。',
@@ -138,6 +182,7 @@ g.xaTaskSys=function(t,c){
    'type_text {"text":"实际输入内容"}；用户让角色自由拟稿时可用 type_text {"compose":"写作意图"}。',
    'ask {"q":"需要用户提供的信息"}；done {"result":"所见结果"}；fail {"why":"卡在哪一步"}。'
  ];
+ if(canLock)tools.push('应用监管工具：app_locks {} 查询真实锁定记录；lock_app {"app":"已安装的应用名称或包名","minutes":30,"reason":"具体监督理由"}；unlock_app {"app":"应用名称或包名"}。主人让你决定时，结合用户的目标和看到的事实选应用与时长，minutes 必须明确给出 1 至 1440 的整数，示例 30 不是固定值。只查状态、讨论功能或否定锁定时，不要创建锁。成功后按真实回执说明应用和解锁时间。');
  if(action==='send_message')tools.push('send_message {"recipient":"用户指定且当前聊天标题显示的名字","label":"当前发送按钮的确切文字"}。先确认应用、收件人和内容，缺信息就在打开应用前一次问清。进入该会话并验证输入后调用。');
  if(action==='publish_moments')tools.push('publish_moments {"label":"当前发表按钮的确切文字"}。没给内容时在打开微信前询问；进入微信朋友圈的编辑页，验证草稿后调用。');
  if(action)tools.push('收到已核实的发送或发布回执才算完成。已点击且结果未知时结束汇报，不能重发。实在无法提交且草稿已核对时可 handoff {"detail":"说明剩余操作"}。');
@@ -152,6 +197,20 @@ g.xaExec=async function(t,c,st){
  if(xaStopped(t))return 'break';
  if(!xaTaskOn(c))return oldExec(t,c,{action:'fail',args:{why:'手机操作已关闭'}});
  const outbound=g.xaPhoneOutbound(t.q||t.goal);
+ if(['lock_app','unlock_app','app_locks'].includes(st.action)){
+   if(!g.xaPhoneLockIntent(t.q||t.goal)||(st.action!=='app_locks'&&!g.xaPhoneLockChange(t.q||t.goal))){
+     t.steps.push({a:st.action,ok:false,why:'本次指令没有请求应用监管',screen:''});return 'go';
+   }
+   const args=st.args||{};
+   if(st.action==='lock_app'&&(!Number.isInteger(args.minutes)||args.minutes<1||args.minutes>1440)){
+     t.steps.push({a:st.action,ok:false,why:'请选择 1 至 1440 分钟的整数时长',screen:''});return 'go';
+   }
+   const res=await oldAct(st.action,{app:String(args.app||''),minutes:args.minutes,reason:String(args.reason||'')});
+   if(xaStopped(t))return 'break';
+   const screen=Array.isArray(res.locks)?JSON.stringify(res.locks).slice(0,1200):String(res.why||'');
+   t.steps.push({a:st.action,ok:res.ok===true,why:String(res.why||''),screen});
+   return 'go';
+ }
  if(st.action==='send_message'||st.action==='publish_moments'){
    const args=st.args||{};
    const recipient=String(args.recipient||'').trim();
