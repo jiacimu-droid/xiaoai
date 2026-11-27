@@ -13,8 +13,11 @@ import androidx.webkit.JavaScriptReplyProxy;
 import androidx.webkit.WebViewAssetLoader;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebViewFeature;
+import org.json.JSONArray;
 import org.json.JSONObject;
 import java.util.Collections;
+import java.util.Locale;
+import java.util.TreeSet;
 
 public final class MainActivity extends Activity {
     private static final String ORIGIN="https://appassets.androidplatform.net";
@@ -84,6 +87,15 @@ public final class MainActivity extends Activity {
                     if("app_lock_palette".equals(action)){
                         AppLocks.savePalette(this,command);respond.accept(PhoneService.result(true,"",""));return;
                     }
+                    if("list_launchable_apps".equals(action)){respond.accept(listLaunchable(command.optString("filter"),command.optInt("limit",80)));return;}
+                    if("app_lock_events".equals(action)){respond.accept(PhoneService.json("ok",true,"why","已讀取攔截紀錄","events",AppLocks.events(this)));return;}
+                    if("notify_status".equals(action)){respond.accept(Notifier.status(this));return;}
+                    if("notify_post".equals(action)){respond.accept(postNotify(command));return;}
+                    if("notify_clear".equals(action)){Notifier.clear(this);respond.accept(PhoneService.result(true,"已清空通知欄",""));return;}
+                    if("notify_permission".equals(action)){
+                        if(!resumed){respond.accept(PhoneService.result(false,"請先回到小愛機再請求通知權限",""));return;}
+                        Notifier.requestPermission(this);respond.accept(Notifier.status(this));return;
+                    }
                     PhoneService service=PhoneService.instance;
                     if("disable".equals(action)){
                         if(service!=null)service.revoke();
@@ -135,8 +147,50 @@ public final class MainActivity extends Activity {
                     Settings.Secure.getUriFor(Settings.Secure.ACCESSIBILITY_ENABLED),false,grantObserver);
         } catch(RuntimeException error){AccessibilityDiagnostics.fault(this,"監聽無障礙授權",error);}
         PhoneService.addConnectionListener(connectionListener);
+        Notifier.ensure(this);
+        // Android 13+ needs a runtime grant before the tray can carry anything.
+        if(!Notifier.granted(this))Notifier.requestPermission(this);
         web.loadUrl(ORIGIN+"/assets/index.html");
     }
+    private JSONObject postNotify(JSONObject command){
+        String kind=command.optString("kind");
+        String channel="lock".equals(kind)||"guard".equals(kind)?Notifier.CHANNEL_GUARD:Notifier.CHANNEL_MSG;
+        String fault=Notifier.post(this,channel,command.optString("title"),command.optString("body"));
+        if(fault.isEmpty())return PhoneService.result(true,"已送出系統通知","");
+        return PhoneService.json("ok",false,"need_permission","no_perm".equals(fault),"why","通知發不出去（"+fault+"）","screen","");
+    }
+
+    /** Launchable, non-system apps the page may offer for locking. Read-only, no service needed. */
+    private JSONObject listLaunchable(String filter,int limit){
+        int cap=(limit<1||limit>120)?80:limit;
+        String want=filter==null?"":filter.trim().toLowerCase(Locale.ROOT);
+        java.util.List<android.content.pm.ResolveInfo> found;
+        try{
+            found=getPackageManager().queryIntentActivities(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER),0);
+        }catch(RuntimeException | LinkageError bad){
+            AccessibilityDiagnostics.fault(this,"讀取已安裝 App",bad);
+            return PhoneService.result(false,"讀不到已安裝的 App 清單","");
+        }
+        android.content.pm.PackageManager pm=getPackageManager();
+        TreeSet<String> seen=new TreeSet<>();
+        JSONArray apps=new JSONArray();
+        int total=0;
+        for(android.content.pm.ResolveInfo r:found){
+            String pkg=r.activityInfo==null?"":r.activityInfo.packageName;
+            if(pkg.isEmpty()||!seen.add(pkg))continue;
+            String label="";
+            try{label=r.loadLabel(pm).toString().trim();}catch(RuntimeException | LinkageError ignored){}
+            if(label.isEmpty())label=pkg;
+            String hay=(label+" "+pkg).toLowerCase(Locale.ROOT);
+            if(!want.isEmpty()&&!hay.contains(want))continue;
+            total++;
+            if(apps.length()>=cap)continue;
+            if(label.length()>24)label=label.substring(0,24)+"…";
+            apps.put(PhoneService.json("pkg",pkg,"label",label,"lockable",AppLocks.lockable(this,pkg)));
+        }
+        return PhoneService.json("ok",true,"why","已列出 App","apps",apps,"total",total,"limit",cap);
+    }
+
     private boolean isAppOrigin(Uri origin){
         int port=origin.getPort();
         return "https".equals(origin.getScheme())&&"appassets.androidplatform.net".equals(origin.getHost())

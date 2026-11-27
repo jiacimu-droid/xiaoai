@@ -510,6 +510,10 @@ textarea{resize:vertical;min-height:75px}
 #momentMenuMask{position:absolute;inset:0;background:rgba(0,0,0,.3);backdrop-filter:blur(2px);display:none;align-items:flex-end;z-index:120}
 #momentMenuMask.show{display:flex}
 
+/* 約會長按菜單（改、重來、刪） */
+#dateMenuMask{position:absolute;inset:0;background:rgba(0,0,0,.3);backdrop-filter:blur(2px);display:none;align-items:flex-end;z-index:120}
+#dateMenuMask.show{display:flex}
+
 /* 側邊欄抽屜 */
 #drawerMask{position:absolute;inset:0;background:rgba(0,0,0,.35);backdrop-filter:blur(2px);display:none;opacity:0;transition:opacity .25s ease;z-index:90}
 #drawerMask.show{display:block;opacity:1}
@@ -4022,6 +4026,57 @@ body.kb-x #xapp .x-scroll{max-height:none}
   </div>
 </div>
 <script>
+/* v1217 日誌 shim：這段排在全部程式碼最前面（連載入守門都在它後面），
+   所以「檔案只抓到一半」「圖片載不出來」「某段腳本一開就炸」這種錯才收得到。
+   它只往 window.__xaLogBuf 塞東西，不碰別的；主程式後段會把這些撈回去存檔。 */
+(function(){
+  try{
+    if(window.__xaLogShim)return;
+    window.__xaLogShim=1;
+    var B=window.__xaLogBuf=[];
+    function push(k,m,d){
+      var t=Date.now();
+      try{if(typeof window.__xaLogSink==='function')return window.__xaLogSink(t,k,m,d)}catch(e){}
+      if(B.length>400)return;
+      B.push([t,k,String(m==null?'':m).slice(0,300),String(d==null?'':d).slice(0,800)]);
+    }
+    window.__xaLogRaw=push;
+    /* capture=true 才收得到圖片／音檔這種資源載入失敗 */
+    window.addEventListener('error',function(e){
+      try{
+        var tg=e&&e.target;
+        if(tg&&tg!==window&&tg.tagName){push('res',tg.tagName+' 載入失敗',String(tg.currentSrc||tg.src||tg.href||'').slice(0,220));return}
+        push('err',String((e&&e.message)||'未知錯誤'),String((e&&e.filename)||'')+((e&&e.lineno)?(':'+e.lineno):'')+((e&&e.error&&e.error.stack)?('\n'+String(e.error.stack).split('\n').slice(1,4).join('\n')):''));
+      }catch(_){}
+    },true);
+    window.addEventListener('unhandledrejection',function(e){
+      try{
+        var r=e&&e.reason;
+        push('promise',String((r&&(r.message||r))||'未接住的 Promise 錯誤').slice(0,260),String((r&&r.stack)||'').split('\n').slice(0,4).join('\n'));
+      }catch(_){}
+    });
+    ['error','warn'].forEach(function(k){
+      try{
+        var o=console[k];
+        if(!o)return;
+        console[k]=function(){
+          try{
+            var a=[].slice.call(arguments).map(function(x){
+              if(typeof x==='string')return x;
+              if(x instanceof Error)return x.message||String(x);
+              try{return JSON.stringify(x)}catch(_j){return String(x)}
+            }).join(' ').slice(0,280);
+            if(a)push(k==='error'?'cerr':'warn',a,'');
+          }catch(_){}
+          return o.apply(console,arguments);
+        };
+      }catch(_){}
+    });
+    push('boot','頁面開始載入','');
+  }catch(_e){}
+})();
+</script>
+<script>
 /* v1209 載入守門：整份檔案 6.7 MB，手機網路常常只抓到一半就斷，
    後面的程式沒進來就會變成「看得到殼、裡面全白」。這段緊排在鎖屏 markup 之後、
    鎖屏腳本之前，所以它自己一定先到，後面卡住時才輪得到它說話。 */
@@ -4187,7 +4242,7 @@ body.kb-x #xapp .x-scroll{max-height:none}
 
 <!-- HOME 桌面 (包含 桌面組件、App 圖標，支援長按進入編輯抖動與全新流暢觸控拖拽) -->
 <div id="home" class="page on">
-  <div id="verPill">v1216 · 不再每輪「對了」硬開新話題</div>
+  <div id="verPill">v1219 · 工作模式、強制鎖、消息欄</div>
   <div id="homeEditBar">
     <span>桌面編輯中… 拖拽換位 · 點一下可用方向盤</span>
     <button class="btn sm" onclick="exitHomeEditMode()">完成</button>
@@ -4654,7 +4709,7 @@ body.kb-x #xapp .x-scroll{max-height:none}
 <div id="settings" class="page">
   <div class="hd"><div class="bk" onclick="home()"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></div><div class="ti">設置</div><div class="rt" onclick="newApi()">+</div></div>
   <div class="body">
-    <div id="appVersionTag" style="text-align:center;font-size:10px;color:var(--ink-soft);padding:10px 0 4px;letter-spacing:.5px">版本 2026-11-25 · 17組件 v1216</div>
+    <div id="appVersionTag" style="text-align:center;font-size:10px;color:var(--ink-soft);padding:10px 0 4px;letter-spacing:.5px">版本 2026-11-27 · 17組件 v1219</div>
 
     <div class="set-sec-title">介面語言</div>
     <div class="sec">
@@ -4765,6 +4820,13 @@ body.kb-x #xapp .x-scroll{max-height:none}
       <label class="lbl">一單最多走幾步</label>
       <div id="xaCapRow" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px"></div>
       <div style="font-size:11px;color:var(--ink-soft);line-height:1.6" id="xaSetTip"></div>
+    </div>
+
+    <div class="set-sec-title">運行日誌</div>
+    <div class="sec">
+      <div style="font-size:11px;color:var(--ink-soft);line-height:1.6;margin:2px 2px 8px">這一台自己記的賬：腳本報錯、接口叫不通、圖片音檔載入失敗、辦事卡住、存檔存不進去，都會寫進來。卡關的時候把這份報告截圖或匯出，比用口頭形容快很多。</div>
+      <div style="font-size:11px;color:var(--ink-soft);line-height:1.6;margin:0 2px 8px" id="xaLogStat">…</div>
+      <div class="row" style="gap:8px"><button class="btn full" onclick="xaLogOpen()">打開運行日誌</button><button class="btn full ghost" onclick="xaLogExport()">匯出報告</button></div>
     </div>
 
     <div class="set-sec-title">存儲設置</div>
@@ -5215,6 +5277,18 @@ body.kb-x #xapp .x-scroll{max-height:none}
       <div class="m-item" onclick="onMenuRecall()"><div class="m-icon">↩️</div><span>撤回</span></div>
       <div class="m-item" onclick="onMenuEdit()"><div class="m-icon">✏️</div><span>修改</span></div>
       <div class="m-item dg" onclick="onMenuDelete()"><div class="m-icon">🗑️</div><span>刪除</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- 長按約會氣泡菜單 (修改、重來、刪除) -->
+<div id="dateMenuMask" onclick="closeDateMenu()">
+  <div class="msg-menu" onclick="event.stopPropagation()">
+    <div class="msg-menu-title" id="dateMenuTitle">選擇操作</div>
+    <div class="menu-btn-grid" style="grid-template-columns:repeat(3,1fr)" id="dateMenuGrid">
+      <div class="m-item" onclick="dateEditOpen()"><div class="m-icon">✏️</div><span>修改</span></div>
+      <div class="m-item" onclick="dateAskRerun()"><div class="m-icon">↩️</div><span>重來</span></div>
+      <div class="m-item dg" onclick="dateDel()"><div class="m-icon">🗑️</div><span>刪除</span></div>
     </div>
   </div>
 </div>
@@ -7808,7 +7882,7 @@ if(target)target.classList.add('on');
 if(typeof wyPillVis==='function')wyPillVis();
 if(id==='home'){renderDesktop();if(typeof syncCmpFrames==='function')syncCmpFrames();}
 if(id!=='home'&&typeof releaseCmpFrames==='function')releaseCmpFrames();
-if(id==='settings'){renderApi();if(typeof renderTts==='function')renderTts();if(typeof renderSettings==='function')renderSettings();try{v1207SettingsRender();}catch(e){}try{v1215SettingsRender();}catch(e){}}
+if(id==='settings'){renderApi();if(typeof renderTts==='function')renderTts();if(typeof renderSettings==='function')renderSettings();try{v1207SettingsRender();}catch(e){}try{v1215SettingsRender();}catch(e){}try{xaLogStat();}catch(e){}}
 if(id==='wechat'){switchWxTab('chats');renderChars();renderContacts();renderMoments();renderMeProfile();}
 if(id==='world')renderWb();
 if(id==='beauty')renderBeauty();
@@ -8670,6 +8744,7 @@ async function sendChatRaw(cfg,msgs,opts){let err;const OO=opts||{};
         if(!r.ok){const t=await r.text();throw new Error('API '+r.status+': '+t.slice(0,150))}
         const d=await r.json();
         try{__dateFinish=String((d&&d.choices&&d.choices[0]&&d.choices[0].finish_reason)||'');}catch(ej){__dateFinish='';}
+        try{xaLogApiOK()}catch(_x){}
         return d.choices?.[0]?.message?.content??'';
       }catch(e){
         err=e;
@@ -8679,6 +8754,7 @@ async function sendChatRaw(cfg,msgs,opts){let err;const OO=opts||{};
       }
     }
   }
+  try{xaLogApiErr(String(((err&&err.message)||'請求失敗')).slice(0,200)+'｜'+((cfg&&cfg.model)||'沒填模型')+'｜'+String((cfg&&cfg.url)||'').slice(0,70))}catch(_x){}
   throw err||new Error('請求失敗')
 }
 function friendly(e){const m=e?.message||'';if(m.includes('Failed to fetch'))return'連不上，檢查網絡或接口地址';if(m.includes('401')||m.includes('403'))return'密鑰不對或沒有權限';if(m.includes('429'))return'請求太快被限流了，等等再試';if(m.includes('返回結果為空'))return'接口通了但沒返回模型，地址可能填錯';return'出錯了：'+m}
@@ -12770,6 +12846,7 @@ async function runAutoReply(c){
  }catch(e){
   c._typing=false;
   try{if(typeof v1208Note==='function')v1208Note(friendly(e));}catch(_n){}
+  try{xaLog('err','聊天回信失敗：'+String((e&&e.message)||'未知錯誤').slice(0,200)+(c&&c.name?('｜'+c.name+(c.remark&&c.remark!==c.name?('（'+c.remark+'）'):'')):''),String((e&&e.stack)||''))}catch(_l){}
   if(chatVisible(c)){toast(friendly(e));renderMsgs();}
  }finally{
   c._typing=false;c._replying=false;save();
@@ -13837,6 +13914,164 @@ function dateEnsure(c){
  if(c.dateAutoCont===undefined)c.dateAutoCont=true;
  if(!Array.isArray(c.datePresets))c.datePresets=['d:basic'];
 }
+
+/* ============================================================
+   ===== v1218：約會可以改、可以撤回、可以讓他重寫 =====
+   聊天那邊早就有長按菜單，約會這邊一直沒有——寫歪了一段只能整場重開。
+   這塊補上：長按任何一段 → 改／撤回重說／讓他重寫／只刪掉。
+   重寫一律走 sendDate 原本那一整套（含未達字數的自動接寫、狀態欄生成），
+   所以不會出現「約會裡另有一套會跟主流程不一樣」的鬼行為。
+   ============================================================ */
+var XDT={i:-1,role:'u',id:''};
+
+function dateBusy(){
+  try{return !!document.querySelector('#dateBody .date-loading')}catch(e){return false}
+}
+function datePrevU(c,i){
+  for(var j=i-1;j>=0;j--){if(c.dateMsgs[j]&&c.dateMsgs[j].role==='u')return j}
+  return -1;
+}
+function closeDateMenu(){
+  try{
+    document.getElementById('dateMenuMask').classList.remove('show');
+    XDT.i=-1;
+  }catch(e){}
+}
+function openDateMenu(node){
+  try{
+    var c=cur;if(!c||!node)return;
+    dateEnsure(c);
+    var i=Number(node.getAttribute('data-i'));
+    if(!isFinite(i)||i<0||!c.dateMsgs[i])return;
+    XDT.i=i;XDT.id=String(c.id);XDT.role=c.dateMsgs[i].role==='u'?'u':'a';
+    var isU=XDT.role==='u';
+    var items=isU
+      ?[['✏️','改這一句','dateEditOpen()'],['↩️','撤回重說','dateAskRerun()'],['🗑️','只刪掉這句','dateDel()']]
+      :[['✏️','改這一段','dateEditOpen()'],['🔁','讓他重寫','dateAskRerun()'],['🗑️','只刪掉這段','dateDel()']];
+    document.getElementById('dateMenuTitle').textContent=isU?'我這一句 · 要怎麼處理':'他這一段 · 要怎麼處理';
+    document.getElementById('dateMenuGrid').innerHTML=items.map(function(x){
+      return '<div class="m-item'+(x[2]==='dateDel()'?' dg':'')+'" onclick="'+x[2]+'"><div class="m-icon">'+x[0]+'</div><span>'+x[1]+'</span></div>';
+    }).join('');
+    document.getElementById('dateMenuMask').classList.add('show');
+  }catch(e){}
+}
+/* ---- 修改：我這句或他這段都能改 ---- */
+function dateEditOpen(){
+  var i=XDT.i,id=XDT.id;closeDateMenu();
+  var c=cur;if(!c||!c.dateMsgs||!c.dateMsgs[i]||String(c.id)!==id)return toast('這一段已經不在了');
+  var m=c.dateMsgs[i];
+  modal('<h3>修改約會內容</h3>'
+    +'<label class="lbl">'+(m.role==='u'?'我這一句':'他這一段')+'・改完立刻生效，他之後看歷史就是改過的版本</label>'
+    +'<textarea id="dtEdit" style="min-height:150px">'+esc(m.text)+'</textarea>'
+    +'<div class="row" style="gap:8px">'
+    +'<button class="btn full" onclick="dateEditSave('+i+')">確認修改</button>'
+    +'<button class="btn full ghost" onclick="closeDateEdit()">取消</button>'
+    +'</div>');
+  try{var ta=document.getElementById('dtEdit');if(ta){ta.focus();ta.setSelectionRange(ta.value.length,ta.value.length)}}catch(e){}
+}
+function dateEditSave(i){
+  var c=cur;
+  var ta=document.getElementById('dtEdit');
+  var val=ta?String(ta.value||'').replace(/\r/g,'').trim():'';
+  if(!val)return toast('內容不能為空');
+  if(!c||!Array.isArray(c.dateMsgs)||i<0||!c.dateMsgs[i]){closeModal();return toast('這一段已經不在了，已關閉')}
+  c.dateMsgs[i].text=val;
+  save();closeModal();renderDate();toast('已改好');
+}
+function closeDateEdit(){closeModal();try{renderDate()}catch(e){}}
+function dateDel(){
+  var i=XDT.i,id=XDT.id;closeDateMenu();
+  var c=cur;if(!c||!c.dateMsgs||!c.dateMsgs[i]||String(c.id)!==id)return;
+  c.dateMsgs.splice(i,1);
+  save();renderDate();toast('已刪掉那一段');
+}
+/* ---- 重寫：一律走 sendDate，先問一句要不要加交代 ---- */
+function dateAskRerun(){
+  var i=XDT.i,id=XDT.id;closeDateMenu();
+  var c=cur;if(!c||!c.dateMsgs||!c.dateMsgs[i]||String(c.id)!==id)return;
+  if(dateBusy())return toast('他還在寫這一輪，先等他寫完');
+  var j=(c.dateMsgs[i].role==='u')?i:datePrevU(c,i);
+  if(j<0)return toast('這一段前面沒有你說話的地方，重不了');
+  var later=Math.max(0,c.dateMsgs.length-j-1);
+  modal('<h3>'+(c.dateMsgs[i].role==='u'?'撤回你這一句，重說一次':'讓他重寫這一段')+'</h3>'
+    +'<div style="font-size:11.5px;color:var(--ink-soft);line-height:1.7">'
+    +'你那句原話會照原樣再發一次，他重新回一段——接寫、狀態欄這些都跟平時一樣走。'
+    +(later>0?('<br><b style="color:#c8402f">注意：這一句後面還有 '+later+' 段會一起收掉</b>，劇情從這裡重新往下走。'):'')
+    +'</div>'
+    +'<label class="lbl">要再多交代他一句嗎？（可留空，只會用在這一次）</label>'
+    +'<textarea id="dtExtra" style="min-height:66px" placeholder="例：別跳太快／他其實在生氣／多寫一點動作，少一點對白"></textarea>'
+    +'<div class="row" style="gap:8px">'
+    +'<button class="btn full" onclick="dateRerun('+j+')">就這麼重來</button>'
+    +'<button class="btn full ghost" onclick="closeDateEdit()">取消</button>'
+    +'</div>');
+  try{var ta=document.getElementById('dtExtra');if(ta)ta.focus()}catch(e){}
+}
+function dateRerun(j){
+  var c=cur;if(!c)return;
+  var ta=document.getElementById('dtExtra');
+  var extra=ta?String(ta.value||'').trim().slice(0,300):'';
+  closeModal();
+  if(dateBusy())return toast('他還在寫這一輪，先等他寫完');
+  if(typeof activeApi==='function'&&!activeApi())return toast('先去「設置」配置 API');
+  if(!Array.isArray(c.dateMsgs))return;
+  var m=c.dateMsgs[j];
+  if(!m||m.role!=='u')return toast('找不到你那一句，先別動');
+  var txt=String(m.text||'');
+  if(!txt.trim())return toast('你那一句是空的，重不了');
+  c.dateMsgs.splice(j);
+  c._dateExtra=extra;
+  var el=document.getElementById('dateInp');
+  if(el)el.value=txt;else{c._dateExtra='';return toast('輸入框不見了，沒法重說')}
+  try{save()}catch(e){}
+  try{renderDate()}catch(e){}
+  try{sendDate()}catch(e){try{toast('重寫沒跑起來：'+((e&&e.message)||''))}catch(_){}}
+}
+/* ---- 長按：跟聊天同一個手勢（550ms），滑動超過 12px 就當作在捲動不算 ---- */
+var XDT_T=null,XDT_XY=null;
+function dtClear(){if(XDT_T){clearTimeout(XDT_T);XDT_T=null}}
+function dtStart(e){
+  try{
+    var t=e.target;
+    var node=(t&&t.closest)?t.closest('.date-u,.date-a'):null;
+    dtClear();
+    if(!node||!node.closest||!node.closest('#dateBody'))return;
+    var p=e.touches&&e.touches[0];
+    XDT_XY=p?[p.clientX,p.clientY]:null;
+    XDT_T=setTimeout(function(){XDT_T=null;openDateMenu(node)},520);
+  }catch(_){}
+}
+function dtMove(e){
+  try{
+    if(!XDT_T||!XDT_XY)return;
+    var p=e.touches&&e.touches[0];if(!p)return;
+    if(Math.abs(p.clientX-XDT_XY[0])>12||Math.abs(p.clientY-XDT_XY[1])>12)dtClear();
+  }catch(_){}
+}
+function dtEnd(){dtClear()}
+/* ---- 第一次進約會提示一句手勢 ---- */
+function dateHintOnce(){
+  try{
+    if(DB.get('dateHintV1218',''))return;
+    DB.set('dateHintV1218',String(Date.now()));
+    setTimeout(function(){try{toast('長按約會裡任何一段：可以改、可以撤回重說、也可以讓他重寫')}catch(e){}},900);
+  }catch(e){}
+}
+try{
+  var _dtB=document.getElementById('dateBody');
+  if(_dtB){
+    _dtB.addEventListener('touchstart',dtStart,{passive:true});
+    _dtB.addEventListener('touchmove',dtMove,{passive:true});
+    _dtB.addEventListener('touchend',dtEnd);
+    _dtB.addEventListener('touchcancel',dtEnd);
+    _dtB.addEventListener('contextmenu',function(e){
+      try{
+        var n=e.target&&e.target.closest?e.target.closest('.date-u,.date-a'):null;
+        if(n&&n.closest('#dateBody')){e.preventDefault();openDateMenu(n)}
+      }catch(_){}
+    });
+  }
+}catch(e){}
+
 function openDateMode(){
  if(!cur)return toast('先選一個好友再約會');
  dateEnsure(cur);
@@ -13845,8 +14080,9 @@ function openDateMode(){
  document.getElementById('dateTitle').textContent=(cur.remark||cur.name)+' · 約會';
  document.getElementById('date').className='page on theme-'+cur.dateTheme;
  go('date'); renderDate(); applyDateBg(); applyDateBubble(); renderDateBeauty(); renderDateChat();
+ try{dateHintOnce()}catch(e){}
 }
-function closeDateMode(){go('chat');}
+function closeDateMode(){try{closeDateMenu()}catch(e){}go('chat');}
 function renderDate(){
  const c=cur; if(!c)return; dateEnsure(c);
  const B=document.getElementById('dateBody');
@@ -13855,7 +14091,7 @@ function renderDate(){
    return;
  }
  B.innerHTML=c.dateMsgs.map((m,i)=>m.role==='u'
-   ?`<div class="date-u"><div class="tx">${esc(m.text)}</div></div>`
+   ?`<div class="date-u" data-i="${i}"><div class="tx">${esc(m.text)}</div></div>`
    :`<div class="date-a" data-i="${i}">${typeof statusHead==='function'?statusHead(m.status):''}${typeof cxInline==='function'?cxInline(m.text):esc(m.text)}${typeof statusHtml==='function'?statusHtml(m.status):''}</div>`).join('');
  B.scrollTop=B.scrollHeight;
  try{if(typeof dsLiveScan==='function')dsLiveScan();}catch(e){}
@@ -13907,6 +14143,8 @@ async function sendDate(){
  try{
    const dl=dateLenBounds(c.dateLen);
    const hist=c.dateMsgs.slice(-12).map(m=>({role:m.role==='u'?'user':'assistant',content:(typeof cxStrip==='function')?cxStrip(m.text):m.text}));
+   var dXt=(typeof c._dateExtra==='string')?c._dateExtra.trim():'';c._dateExtra='';
+   if(dXt&&hist.length&&hist[hist.length-1].role==='user')hist[hist.length-1].content+='\n\n（這一輪她另外交代你一句，只管這一次，之後別提起）'+dXt;
    if(hist.length&&hist[hist.length-1].role==='user')hist[hist.length-1].content+=dateLenAsk(dl);
    const sysP=buildDateSys(c);
    dateNote('');
@@ -16045,6 +16283,7 @@ function promptCheckRefresh() {
     + row('本機核心規則', n ? (n + ' 份／' + charsR.toLocaleString() + ' 字 · ' + rules.map(function (r) { return r.t; }).join('、')) : '沒有一份開著 — 這才是 AI 不讀規則最常見的原因', n ? '' : 'w')
     + row('對話內置詞（這個角色）', pn ? (pn + ' 份／' + pc.toLocaleString() + ' 字 · ' + ps.map(function (x) { return x.name; }).join(' + ')) : '這個角色沒有勾任何內置詞（在「檔案 → 內置創作規則」裡選）', pn ? '' : 'w')
     + row('世界書', bs.length ? (bs.length + ' 份／' + bt.toLocaleString() + ' 字 · ' + bs.map(function (w) { return w.name; }).join('、')) : '一份都沒生效 — 要嘛沒有世界書，要嘛被關掉了', bs.length ? '' : 'w')
+    + (typeof v1217PeekRows === 'function' ? v1217PeekRows() : '')
     + (typeof v1216PeekRows === 'function' ? v1216PeekRows() : '')
     + (typeof v1215PeekRows === 'function' ? v1215PeekRows() : '')
     + (typeof v1214PeekRows === 'function' ? v1214PeekRows() : '')
@@ -17745,6 +17984,7 @@ function xaEnd(t,state,note){
   var c=xaCharOf(t);
   try{if(c)save()}catch(e){}
   try{xaPaint(t)}catch(e){}
+  try{xaLogXa(state,t)}catch(_l){}
   if(state==='done')toast('辦事完成：'+xaCut(t.done,20));
   else if(state==='fail')toast('這件事卡住了，卡片裡寫了為什麼');
 }
@@ -18087,6 +18327,1484 @@ try{
 })();
 
 
+
+/* ============================================================
+   ===== v1217：運行日誌 =====
+   這一台自己記的賬。腳本報錯、接口叫不通、圖片音檔載入失敗、
+   辦事辦到一半卡住、存檔存不進去——全部寫進一份環形清單，
+   設定頁按「打開運行日誌」就是一份看得見的報告。
+   最早的錯誤（載入階段的）由檔頭那段 shim 先收著，這邊再撈回來。
+   ============================================================ */
+var XAL={list:null,last:{},timer:0,f:'all',fold:{},shown:0,stat:null,frames:0};
+function xaVer(){try{var v=((document.getElementById('verPill')||{}).textContent||'').trim().split(/\s|[·]/)[0];return /^v\d{3,}$/.test(v)?v:'當前版本'}catch(e){return '當前版本'}}
+var XA_LOG_CAP=400,XA_LOG_KEEP=220,XA_LOG_SHOWN=140;
+
+function xaLogLoad(){
+  if(XAL.list)return XAL.list;
+  var a=[];
+  try{var old=DB.get('xaLog',[]);if(Array.isArray(old))a=old.filter(function(x){return x&&x.t})}catch(e){}
+  XAL.list=a;return a;
+}
+function xaLogStatLoad(){
+  if(XAL.stat)return XAL.stat;
+  var s={api:0,apiErr:0,xa:0,xaFail:0,err:0,boots:0,ovf:0,since:Date.now()};
+  try{var o=DB.get('xaLogStat',null);if(o&&typeof o==='object'){for(var k in s){if(typeof o[k]==='number'&&isFinite(o[k]))s[k]=o[k]}}}catch(e){}
+  XAL.stat=s;return s;
+}
+function xaLogTick(){
+  if(XAL.timer)return;
+  try{XAL.timer=setTimeout(xaLogFlush,1500)}catch(e){}
+}
+function xaLogFlush(){
+  XAL.timer=0;
+  try{
+    var L=xaLogLoad();
+    var cut=L.slice(-XA_LOG_KEEP).map(function(e){return {t:e.t,k:e.k,m:String(e.m||'').slice(0,300),d:String(e.d||'').slice(0,260),n:e.n||1,l:e.l||0}});
+    DB.set('xaLog',cut);
+    DB.set('xaLogStat',xaLogStatLoad());
+  }catch(e){}
+}
+/* 同一種錯 4 秒內只記一條，後面重來的只加次數，不會把清單刷爆 */
+function xaLogSink(t,k,m,d){
+  try{
+    var L=xaLogLoad(),st=xaLogStatLoad();
+    m=String(m==null?'':m).replace(/\s+$/,'').slice(0,300)||'（空訊息）';
+    d=String(d==null?'':d).slice(0,800);
+    var key=k+'\u0001'+m;
+    if(k==='err'||k==='cerr'||k==='promise'||k==='iframe')st.err++;
+    var last=XAL.last[key];
+    if(last&&t-last.t<4000){last.l=t;last.n=(last.n||1)+1;if(d&&!last.d)last.d=d;xaLogTick();return 0}
+    var e={t:t,k:k,m:m,d:d,n:1};
+    L.push(e);XAL.last[key]=e;
+    if(L.length>XA_LOG_CAP)L.splice(0,L.length-XA_LOG_CAP);
+    if(Object.keys(XAL.last).length>600)XAL.last={};
+    xaLogTick();
+    return 1;
+  }catch(_){return 0}
+}
+function xaLog(k,m,d){try{return xaLogSink(Date.now(),k,m,d)}catch(e){return 0}}
+
+/* ---- 計數用的三個小鉤子（插在 sendChatRaw / xaEnd 裡面） ---- */
+function xaLogApiOK(){try{xaLogStatLoad().api++;xaLogTick()}catch(e){}}
+function xaLogApiErr(msg){
+  try{
+    var st=xaLogStatLoad();st.apiErr++;
+    xaLog('api','接口呼叫失敗：'+String(msg||'').slice(0,240),'');
+    xaLogTick();
+  }catch(e){}
+}
+function xaLogXa(state,t){
+  try{
+    var st=xaLogStatLoad();
+    if(state==='done'){st.xa++;return}
+    if(state!=='fail'&&state!=='stop'){return}
+    st.xaFail++;
+    var tr=[];
+    try{(t.steps||[]).forEach(function(s,i){tr.push((i+1)+'. '+(s.a||'?')+(s.ok?'  ok':'  ×')+(s.why?(' '+String(s.why).slice(0,60)):''))})}catch(e){}
+    xaLog('xa','辦事'+(state==='fail'?'沒辦成':'中途叫停')+'：'+xaCut(t.goal||t.q||'',44)+'｜'+xaCut(t.done||'',90),tr.join('\n'));
+    xaLogTick();
+  }catch(e){}
+}
+/* ---- iframe 裡（小電腦、擬真系統）的錯也想辦法收 ---- */
+function xaLogFrame(w,nm){
+  try{
+    if(!w||w.__xaLogHooked)return;
+    w.__xaLogHooked=1;XAL.frames++;
+    w.addEventListener('error',function(e){
+      try{
+        var tg=e&&e.target;
+        if(tg&&tg!==w&&tg.tagName){xaLog('res','「'+(nm||'iframe')+'」內 '+tg.tagName+' 載入失敗',String(tg.src||'').slice(0,200));return}
+        xaLog('iframe','「'+(nm||'iframe')+'」內報錯：'+String((e&&e.message)||'未知錯誤'),String((e&&e.error&&e.error.stack)||'').split('\n').slice(1,4).join('\n'));
+      }catch(_){}
+    },true);
+    w.addEventListener('unhandledrejection',function(e){
+      try{var r=e&&e.reason;xaLog('iframe','「'+(nm||'iframe')+'」內 Promise 沒接住：'+String((r&&(r.message||r))||'未知'),String((r&&r.stack)||'').split('\n').slice(0,4).join('\n'))}catch(_){}
+    });
+  }catch(e){}
+}
+function xaLogFrames(){
+  try{
+    var f=document.querySelectorAll('iframe');
+    for(var i=0;i<f.length;i++){
+      var w=null;try{w=f[i].contentWindow}catch(e){}
+      if(w)xaLogFrame(w,f[i].title||f[i].id||'組件');
+    }
+  }catch(e){}
+}
+/* ---- 開機：把 shim 收的早期錯誤撈回來，標一筆本次開機 ---- */
+function xaLogBoot(){
+  try{
+    var st=xaLogStatLoad();
+    st.boots++;
+    xaLogLoad();
+    var buf=window.__xaLogBuf||[];
+    for(var i=0;i<buf.length;i++){
+      var b=buf[i];
+      XAL.list.push({t:b[0],k:b[1],m:String(b[2]||'').slice(0,300),d:String(b[3]||'').slice(0,800),n:1});
+    }
+    window.__xaLogBuf=[];
+    window.__xaLogSink=function(t,k,m,d){return xaLogSink(t,k,m,d)};
+    var n=buf.length;
+    xaLog('boot','開機完成 · '+xaVer()+(n?('（載入階段先收到 '+n+' 條）'):''),
+      (navigator.userAgent||'')+'\n螢幕 '+window.innerWidth+'×'+window.innerHeight+' · dpr '+(window.devicePixelRatio||1));
+    xaLogFlush();
+    setTimeout(xaLogFrames,1500);
+    setInterval(xaLogFrames,15000);
+    document.addEventListener('load',function(ev){
+      try{var t=ev&&ev.target;if(t&&t.tagName==='IFRAME')xaLogFrame(t.contentWindow,t.title||t.id||'組件')}catch(e){}
+    },true);
+    window.addEventListener('pagehide',function(){try{xaLogFlush()}catch(e){}});
+    xaLogStat();
+  }catch(e){}
+}
+/* ---- 設定頁那行小字 ---- */
+function xaLogStat(){
+  try{
+    var el=document.getElementById('xaLogStat');if(!el)return;
+    xaLogLoad();
+    var st=xaLogStatLoad();
+    var bad=0;
+    for(var i=0;i<XAL.list.length;i++){var k=XAL.list[i].k;if(k==='err'||k==='cerr'||k==='promise'||k==='iframe')bad+=XAL.list[i].n||1}
+    el.innerHTML='目前收了 <b>'+XAL.list.length+'</b> 條，清單裡腳本報錯 <b>'+bad+'</b> 次。'
+      +'累計 AI 呼叫 '+st.api+' 次成功、'+st.apiErr+' 次失敗；辦事完成 '+st.xa+' 單、卡住 '+st.xaFail+' 單。';
+  }catch(e){}
+}
+var XA_LOG_KINDS={err:'腳本報錯',cerr:'console.error',promise:'Promise',iframe:'組件內',res:'資源載入',api:'接口',store:'存檔',xa:'辦事',warn:'提醒',boot:'開機',info:'記錄'};
+function xaLogKind(k){return XA_LOG_KINDS[k]||k}
+function xaLogGroup(k){
+  if(k==='err'||k==='cerr'||k==='promise'||k==='iframe')return 'err';
+  if(k==='api'||k==='res')return 'net';
+  if(k==='xa')return 'xa';
+  return 'other';
+}
+var XA_LOG_FILTERS=[['all','全部'],['err','報錯'],['net','網路'],['xa','辦事'],['other','其它']];
+function xaLogMatch(e){
+  var f=XAL.f||'all';
+  if(f==='all')return 1;
+  if(f==='err')return e.k==='err'||e.k==='cerr'||e.k==='promise'||e.k==='iframe';
+  if(f==='net')return e.k==='api'||e.k==='res';
+  if(f==='xa')return e.k==='xa';
+  return !(e.k==='err'||e.k==='cerr'||e.k==='promise'||e.k==='iframe'||e.k==='api'||e.k==='res'||e.k==='xa');
+}
+function xaLogTime(t){
+  try{
+    var d=new Date(t),p=function(n){return (n<10?'0':'')+n};
+    return p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds());
+  }catch(e){return '--:--'}
+}
+function xaLogRows(){
+  var out=[];
+  try{
+    var L=xaLogLoad();
+    for(var i=L.length-1;i>=0;i--){if(xaLogMatch(L[i])){out.push(i);if(out.length>=XA_LOG_SHOWN)break}}
+  }catch(e){}
+  return out;
+}
+function xaLogBody(){
+  var idxs=xaLogRows(),h='';
+  XAL.shown=idxs.length;
+  if(!idxs.length){
+    return '<div class="xal-empty">'+(xaLogLoad().length?'這個篩選底下沒有東西，換一個看看。':'還沒有記錄。正常用一陣子再回來看，有出錯才會出現東西。')+'</div>';
+  }
+  for(var i=0;i<idxs.length;i++){
+    var e=XAL.list[idxs[i]];
+    if(!e)continue;
+    var g=xaLogGroup(e.k);
+    var det=String(e.d||'');
+    var open=XAL.fold[idxs[i]];
+    h+='<div class="xal-row xal-'+g+(e.n>1?' xal-multi':'')+'" id="xalr'+idxs[i]+'">'
+      +'<div class="xal-hd">'
+      +'<span class="xal-badge xal-b-'+g+'">'+esc(xaLogKind(e.k))+'</span>'
+      +'<span class="xal-time">'+xaLogTime(e.t)+'</span>'
+      +(e.n>1?('<span class="xal-n">×'+(e.n>99?'99+':e.n)+(e.l?(' 最近 '+xaLogTime(e.l)):'')+'</span>'):'')
+      +'</div>'
+      +'<div class="xal-msg" onclick="xaLogFold('+idxs[i]+')">'+esc(e.m)+(det?'<span class="xal-more">'+(open?'收起':'展開')+'</span>':'')+'</div>'
+      +(det?('<div class="xal-det'+(open?' on':'')+'" id="xald'+idxs[i]+'">'+esc(det)+'</div>'):'')
+      +'</div>';
+  }
+  return h;
+}
+function xaLogFold(i){
+  try{
+    XAL.fold[i]=!XAL.fold[i];
+    var d=document.getElementById('xald'+i),r=document.getElementById('xalr'+i);
+    if(d)d.classList.toggle('on',!!XAL.fold[i]);
+    if(r){var mo=r.querySelector('.xal-more');if(mo)mo.textContent=XAL.fold[i]?'收起':'展開'}
+  }catch(e){}
+}
+function xaLogSetFilter(f){XAL.f=f;xaLogRerender()}
+function xaLogRerender(){
+  try{
+    var b=document.getElementById('xalBody');if(b)b.innerHTML=xaLogBody();
+    var c=document.getElementById('xalChips');
+    if(c)c.innerHTML=XA_LOG_FILTERS.map(function(x){return '<button class="xal-chip'+(XAL.f===x[0]?' on':'')+'" onclick="xaLogSetFilter(\''+x[0]+'\')">'+x[1]+'</button>'}).join('');
+    var s=document.getElementById('xalSum');
+    if(s){var st=xaLogStatLoad();s.innerHTML='共 '+xaLogLoad().length+' 條（這頁顯示 '+XAL.shown+' 條）· 腳本報錯累計 '+st.err+' 次 · AI 呼叫 '+st.api+' 成／'+st.apiErr+' 敗 · 辦事 '+st.xa+' 成／'+st.xaFail+' 卡'}
+  }catch(e){}
+}
+function xaLogOpen(){
+  try{
+    XAL.fold={};XAL.armClear=0;
+    xaLogLoad();
+    var st=xaLogStatLoad();
+    var h='<h3>運行日誌</h3>'
+      +'<div style="font-size:11px;color:var(--ink-soft);line-height:1.6;margin-bottom:8px">'
+      +'這一台自己記的：腳本報錯、接口叫不通、圖片音檔載入失敗、辦事卡住、存檔存不進去都會寫進來。清單留在這台裝置裡（記最後 '+XA_LOG_KEEP+' 條），重開網頁還在。'
+      +'<br>本次開機已記 '+st.boots+' 次開機。點任何一條可以看詳細，右下角可以複製整份報告或匯出檔。'
+      +'</div>'
+      +'<div class="xal-chips" id="xalChips"></div>'
+      +'<div class="xal-sum" id="xalSum"></div>'
+      +'<div id="xalBody" class="xal-list"></div>'
+      +'<div class="row" style="gap:8px;margin-top:12px">'
+      +'<button class="btn full ghost" onclick="xaLogCopy()">複製報告</button>'
+      +'<button class="btn full ghost" onclick="xaLogExport()">匯出 .txt</button>'
+      +'</div>'
+      +'<div class="row" style="gap:8px;margin-top:8px">'
+      +'<button class="btn full ghost" id="xalClr" onclick="xaLogClear()">清空</button>'
+      +'<button class="btn full" onclick="closeModal()">關閉</button>'
+      +'</div>';
+    modal(h);
+    xaLogRerender();
+    xaLogFlush();
+  }catch(e){try{toast('日誌打不開：'+((e&&e.message)||''))}catch(_){}}
+}
+function xaLogText(){
+  var L=[],push=function(s){L.push(s)};
+  try{
+    var st=xaLogStatLoad();
+    push('小愛機 運行報告（'+xaVer()+'）');
+    push('產生時間：'+new Date().toLocaleString());
+    push('開機次數：累計 '+st.boots+' 次 · 本份記錄 '+xaLogLoad().length+' 條');
+    push('AI 呼叫：成功 '+st.api+' 次／失敗 '+st.apiErr+' 次');
+    push('辦事：完成 '+st.xa+' 單／卡住 '+st.xaFail+' 單');
+    push('腳本報錯：累計 '+st.err+' 次');
+    push('裝置：'+String(navigator.userAgent||'').slice(0,160));
+    push('視窗：'+window.innerWidth+'×'+window.innerHeight+' · dpr '+(window.devicePixelRatio||1)+' · 語言 '+(navigator.language||''));
+    try{
+      var kb=0,n=0;
+      for(var i=0;i<localStorage.length;i++){var kk=localStorage.key(i);var vv=localStorage.getItem(kk)||'';kb+=kk.length+vv.length;n++}
+      push('本機存檔：'+n+' 個鍵 · 約 '+Math.round(kb/1024)+' KB（上限大約 5 MB）');
+    }catch(e){push('本機存檔：讀不到')}
+    push('超大資料改放 IndexedDB：'+(st.ovf||0)+' 次'+((st.ovf||0)?'':'（本機存檔還放得下）'));
+    push('');
+    push('—— 記錄（新的在前）——');
+    for(var j=XAL.list.length-1;j>=0;j--){
+      var e=XAL.list[j];
+      push('['+new Date(e.t).toLocaleString()+'] '+(e.k==='boot'?'【開機】':'【'+xaLogKind(e.k)+'】')+e.m+(e.n>1?('（同一種 '+e.n+' 次'+(e.l?('，最近 '+new Date(e.l).toLocaleTimeString()):'')+'）'):''));
+      if(e.d)e.d.split('\n').forEach(function(x){push('    '+x)});
+    }
+  }catch(err){push('（組報告時出錯：'+((err&&err.message)||'未知')+'）')}
+  return L.join('\n');
+}
+function xaLogCopy(){
+  try{
+    var t=xaLogText();
+    var done=function(){toast('報告已複製 ('+t.length+' 字)')};
+    if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(done,function(){xaLogCopyFall(t,done)})}
+    else xaLogCopyFall(t,done);
+  }catch(e){try{toast('複製不成，改用匯出')}catch(_){}}
+}
+function xaLogCopyFall(t,done){
+  try{
+    var ta=document.createElement('textarea');ta.value=t;ta.style.cssText='position:fixed;left:-9999px;top:0';
+    document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);done();
+  }catch(e){try{toast('複製不成，改用匯出')}catch(_){}}
+}
+function xaLogExport(){
+  try{
+    var t=xaLogText();
+    var d=new Date(),p=function(n){return (n<10?'0':'')+n};
+    var nm='xaiji_log_'+d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+'-'+p(d.getHours())+p(d.getMinutes())+'.txt';
+    var bl=new Blob([t],{type:'text/plain;charset=utf-8'});
+    var a=document.createElement('a');a.href=URL.createObjectURL(bl);a.download=nm;
+    document.body.appendChild(a);a.click();
+    setTimeout(function(){try{URL.revokeObjectURL(a.href);document.body.removeChild(a)}catch(e){}},800);
+    toast('已匯出 '+nm);
+  }catch(e){try{toast('匯出不成：'+((e&&e.message)||''))}catch(_){}}
+}
+function xaLogClear(){
+  try{
+    var b=document.getElementById('xalClr');
+    if(!XAL.armClear){XAL.armClear=1;if(b)b.textContent='再按一次確定清空';toast('再按一次才會真的清空');return}
+    XAL.armClear=0;
+    XAL.list=[];XAL.last={};XAL.fold={};
+    try{DB.set('xaLog',[])}catch(e){}
+    xaLog('info','日誌已被機主清空','');
+    xaLogFlush();xaLogRerender();xaLogStat();
+  }catch(e){}
+}
+/* ---- 體檢裡面那一欄 ---- */
+function v1217PeekRows(){
+  try{
+    var L=xaLogLoad(),st=xaLogStatLoad();
+    var bad=0,i;
+    for(i=0;i<L.length;i++){var k=L[i].k;if(k==='err'||k==='cerr'||k==='promise'||k==='iframe')bad+=L[i].n||1}
+    var lastErr=null;
+    for(i=L.length-1;i>=0;i--){var kk=L[i].k;if(kk==='err'||kk==='cerr'||kk==='promise'||kk==='iframe'){lastErr=L[i];break}}
+    var out='<div class="pc-row'+(bad?' warn':'')+'"><div class="pc-t">運行日誌</div><div class="pc-s">'
+      +esc('共 '+L.length+' 條 · 腳本報錯 '+bad+' 次 · 接口失敗 '+st.apiErr+' 次 · 辦事卡住 '+st.xaFail+' 單')
+      +(lastErr?(' · 最近一次：'+xaCut(lastErr.m,44)):'')
+      +'</div>'
+      +'<span class="pc-a" onclick="closeModal();xaLogOpen()">打開</span>'
+      +'</div>';
+    if(lastErr){
+      var ago=Math.max(0,Math.round((Date.now()-lastErr.t)/60000));
+      out+='<div class="pc-row'+(ago>60?'':' warn')+'"><div class="pc-t">最近報錯</div><div class="pc-s">'
+        +esc(xaLogKind(lastErr.k)+' · '+(ago<1?'剛剛':(ago<60?(ago+' 分鐘前'):Math.round(ago/60)+' 小時前'))+' · '+lastErr.m+(lastErr.d?('｜'+xaCut(String(lastErr.d).replace(/\n/g,' '),60)):''))
+        +'</div></div>';
+    }
+    return out;
+  }catch(e){return ''}
+}
+/* ---- 樣式自己插一個，不動原本的 ---- */
+function xaLogCss(){
+  try{
+    if(document.getElementById('xaLogCss'))return;
+    var s=document.createElement('style');s.id='xaLogCss';
+    s.textContent=[
+      '.xal-chips{display:flex;flex-wrap:wrap;gap:6px;position:sticky;top:-18px;padding:16px 0 6px;margin-top:-10px;background:var(--paper);z-index:2}',
+      '.xal-chip{border:1px solid var(--line);background:none;border-radius:999px;padding:5px 12px;font-size:11.5px;color:var(--ink-soft);font-family:inherit}',
+      '.xal-chip.on{background:#2a251f;color:#f6f1e8;border-color:#2a251f}',
+      '.xal-sum{font-size:11px;color:var(--ink-soft);line-height:1.6;margin:8px 0 4px}',
+      '.xal-list{display:flex;flex-direction:column}',
+      '.xal-row{border-bottom:1px solid var(--line);padding:8px 0}',
+      '.xal-hd{display:flex;align-items:center;gap:6px;margin-bottom:3px}',
+      '.xal-badge{font-size:10px;padding:1.5px 7px;border-radius:999px;color:#fff;background:#8a8a8a;flex:none}',
+      '.xal-b-err{background:#b8605b}.xal-b-net{background:#5b8db8}.xal-b-xa{background:#c98a3d}.xal-b-other{background:#8a8a8a}',
+      '.xal-time{font-size:10.5px;color:var(--ink-soft);font-variant-numeric:tabular-nums}',
+      '.xal-n{font-size:10.5px;color:#b8605b;font-weight:700}',
+      '.xal-msg{font-size:12px;line-height:1.55;word-break:break-word}',
+      '.xal-more{margin-left:6px;font-size:10.5px;color:#07c160;font-weight:700}',
+      '.xal-det{display:none;margin-top:5px;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:8px 9px;font-size:10.5px;line-height:1.6;color:var(--ink-soft);white-space:pre-wrap;word-break:break-all;max-height:180px;overflow:auto}',
+      '.xal-det.on{display:block}',
+      '.xal-multi .xal-msg{color:#b8605b}',
+      '.xal-empty{font-size:11.5px;color:var(--ink-soft);line-height:1.7;padding:14px 2px}'
+    ].join('');
+    document.head.appendChild(s);
+  }catch(e){}
+}
+xaLogCss();
+try{
+  window.__xaLogInstalled=1;
+  xaLogBoot();
+  /* 存檔失敗也要記一筆：把 DB.set 包一層，只多記一筆，不改它的行為 */
+  try{
+    var _ovf0=(typeof IDBX!=='undefined'&&IDBX.overflow)?IDBX.overflow:null;
+    if(_ovf0&&!IDBX.__xaLogOvf){
+      IDBX.__xaLogOvf=1;
+      IDBX.overflow=function(k,v){
+        try{xaLogStatLoad().ovf=(XAL.stat.ovf||0)+1}catch(e){}
+        var r;
+        try{r=_ovf0(k,v)}catch(e){xaLog('store','超大資料改放 IndexedDB 直接炸（'+String(k)+'）：'+String((e&&e.message)||e).slice(0,80),'');throw e}
+        try{if(r&&typeof r.catch==='function')r.catch(function(e){xaLog('store','超大資料改放 IndexedDB 沒成功（'+String(k)+'）：'+String((e&&e.message)||e).slice(0,80),'')})}catch(e){}
+        return r;
+      };
+    }
+    var _xalOldSet=DB.set;
+    if(typeof _xalOldSet==='function'&&!DB.__xaLogWrapped){
+      DB.__xaLogWrapped=1;
+      DB.set=function(k,v){
+        var ok=_xalOldSet(k,v);
+        try{
+          if(!ok&&k!=='xaLog'&&k!=='xaLogStat'){
+            var now=Date.now();
+            if(!XAL.storeAt||now-XAL.storeAt>15000){XAL.storeAt=now;xaLog('store','有一個東西存不進去（'+String(k)+'），重新整理就會不見','')}
+          }
+        }catch(e){}
+        return ok;
+      };
+    }
+  }catch(e){}
+}catch(e){}
+
+</script>
+<script>
+/* ================= v1219-A · 消息欄 / AI 主動發訊息 / 強制應用鎖 ================= */
+
+/* ---- 1. 消息欄（站內通知中心 + APK 系統通知） ---- */
+var NK={box:[],unread:0,seen:{},master:1,native:1,timer:null,asked:0,onPage:'home'};
+function nkHM(t){try{return new Date(t).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}catch(e){return ''}}
+function nkAgo(t){var d=Date.now()-Number(t||0);if(d<60000)return '剛剛';if(d<3600000)return Math.floor(d/60000)+' 分鐘前';if(d<86400000)return Math.floor(d/3600000)+' 小時前';return nkHM(t)}
+function nkLoad(){
+  try{var b=DB.get('nkBox',[]);NK.box=Array.isArray(b)?b.filter(function(x){return x&&x.t&&x.body}):[]}catch(e){NK.box=[]}
+  try{NK.unread=Math.max(0,Number(DB.get('nkUnread',0))||0)}catch(e){NK.unread=0}
+  try{NK.master=Number(DB.get('nkMaster',1))===1?1:0}catch(e){NK.master=1}
+  try{NK.native=Number(DB.get('nkNative',1))===1?1:0}catch(e){NK.native=1}
+  try{var s=DB.get('nkSeen',{});NK.seen=(s&&typeof s==='object')?s:{}}catch(e){NK.seen={}}
+}
+function nkSave(){try{if(NK.box.length>60)NK.box.length=60;DB.set('nkBox',NK.box);DB.set('nkUnread',NK.unread);DB.set('nkSeen',NK.seen)}catch(e){}}
+function nkCss(){return [
+'#nkPill{position:absolute;top:8px;left:10px;z-index:11;display:none;align-items:center;gap:5px;background:rgba(255,255,255,.86);border:1px solid var(--line);color:var(--ink);font-size:11px;padding:4px 9px 4px 7px;border-radius:12px;box-shadow:0 3px 10px rgba(0,0,0,.10);cursor:pointer;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}',
+'#nkPill.show{display:flex}',
+'#nkPill svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}',
+'#nkPill i{font-style:normal;font-weight:700;min-width:15px;height:15px;line-height:15px;text-align:center;border-radius:8px;background:#c8402f;color:#fff;font-size:9.5px;padding:0 3px}',
+'#nkPill i.zero{background:var(--ink-soft);opacity:.55}',
+'#nkShade{position:absolute;inset:0;z-index:130;background:rgba(12,14,18,.42);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);display:none;flex-direction:column}',
+'#nkShade.show{display:flex}',
+'#nkShade .nk-top{background:rgba(250,250,248,.97);border-bottom:1px solid var(--line);padding:12px 14px 10px;border-radius:0 0 16px 16px;box-shadow:0 8px 22px rgba(0,0,0,.16)}',
+'#nkShade .nk-hd{display:flex;align-items:center;gap:8px}',
+'#nkShade .nk-tt{font-size:14px;font-weight:700;flex:1}',
+'#nkShade .nk-x{font-size:13px;color:var(--ink-soft);padding:2px 6px;cursor:pointer}',
+'#nkShade .nk-sub{font-size:10.5px;color:var(--ink-soft);line-height:1.55;margin-top:5px}',
+'#nkShade .nk-body{flex:1;overflow:auto;padding:10px 12px 16px}',
+'#nkShade .nk-item{background:rgba(255,255,255,.94);border:1px solid var(--line);border-radius:13px;padding:9px 11px;margin-bottom:8px;box-shadow:0 2px 7px rgba(0,0,0,.05)}',
+'#nkShade .nk-item.un{border-left:3px solid #c8402f}',
+'#nkShade .nk-a{display:flex;align-items:baseline;gap:7px}',
+'#nkShade .nk-n{font-size:12.5px;font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+'#nkShade .nk-t{font-size:10px;color:var(--ink-soft);white-space:nowrap}',
+'#nkShade .nk-b{font-size:11.5px;color:var(--ink);line-height:1.6;margin-top:3px;word-break:break-word}',
+'#nkShade .nk-go{font-size:10.5px;color:#7d8b6f;margin-top:5px;cursor:pointer}',
+'#nkShade .nk-ft{display:flex;gap:8px;padding:0 12px 14px}',
+'#nkShade .nk-empty{text-align:center;color:var(--ink-soft);font-size:11.5px;line-height:1.9;padding:40px 16px}',
+'.nk-sw{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:11.5px;color:var(--ink);padding:7px 2px;border-top:1px solid var(--line);margin-top:8px}',
+'.nk-sw .tg{transform:scale(.86)}'
+].join('\n')}
+function nkDom(){
+  if(document.getElementById('nkShade'))return true;
+  var scr=document.getElementById('screen');if(!scr)return false;
+  var st=document.createElement('style');st.id='nkCss';st.textContent=nkCss();
+  var pill=document.createElement('div');pill.id='nkPill';
+  pill.innerHTML='<svg viewBox="0 0 24 24"><path d="M18 8.6a6 6 0 1 0-12 0c0 6-2.4 7.4-2.4 7.4h16.8S18 14.6 18 8.6z"/><path d="M13.7 19.4a2 2 0 0 1-3.4 0"/></svg><span>消息欄</span><i id="nkPillN" class="zero">0</i>';
+  pill.onclick=function(){nkOpen()};
+  var sh=document.createElement('div');sh.id='nkShade';
+  sh.innerHTML='<div class="nk-top"><div class="nk-hd"><div class="nk-tt">消息欄</div><div class="nk-x" onclick="nkClose()">收起 ▾</div></div>'+
+    '<div class="nk-sub" id="nkSub">對方傳來、但他自己按下的訊息都會留在這裡。</div>'+
+    '<div class="nk-sw"><span>站內留訊息</span><div class="tg on" id="nkMasterTg" onclick="nkToggleMaster()"><div class="kn"></div></div></div>'+
+    '<div class="nk-sw"><span>同時發系統通知（要 APK）</span><div class="tg on" id="nkNativeTg" onclick="nkToggleNative()"><div class="kn"></div></div></div></div>'+
+    '<div class="nk-body" id="nkList"></div>'+
+    '<div class="nk-ft"><button class="btn full" onclick="nkTest()">發一條測試通知</button><button class="btn full ghost" onclick="nkWipe()">清空</button></div>';
+  sh.addEventListener('click',function(e){if(e.target===sh)nkClose()});
+  scr.appendChild(st);scr.appendChild(pill);scr.appendChild(sh);
+  return true;
+}
+function nkPill(){
+  var p=document.getElementById('nkPill');if(!p)return;
+  var n=document.getElementById('nkPillN');if(n){n.textContent=NK.unread>99?'99+':String(NK.unread);n.className=NK.unread?'':'zero'}
+}
+function nkVis(id){
+  var p=document.getElementById('nkPill');if(!p)return;
+  p.classList.toggle('show',id==='home');
+}
+function nkOpen(){
+  if(!nkDom())return;
+  for(var i=0;i<NK.box.length;i++)NK.box[i].read=1;
+  NK.unread=0;nkSave();nkPill();
+  var c=document.getElementById('nkChatCount');
+  var total=0;try{total=(typeof chars!=='undefined'?chars:[]).reduce(function(n,x){return n+(Number(x.unread)||0)},0)}catch(e){}
+  document.getElementById('nkShade').classList.add('show');
+  nkRenderList(total);
+}
+function nkClose(){var s=document.getElementById('nkShade');if(s)s.classList.remove('show')}
+function nkRenderList(total){
+  var box=document.getElementById('nkList');if(!box)return;
+  var sub=document.getElementById('nkSub');
+  if(sub)sub.textContent=NK.box.length?('一共 '+NK.box.length+' 條，最多留 60 條。'+(total?'另外還有 '+total+' 封沒讀的聊天。':'聊天列表目前沒有未讀。')):'還沒有東西。對方回你一句、或他主動傳過來，就會落在這裡。';
+  if(!NK.box.length){box.innerHTML='<div class="nk-empty">空空的<br>這一道就是手機上的通知欄：APP 在背後時，APK 會同時推系統通知。</div>';return}
+  box.innerHTML=NK.box.map(function(it,i){
+    return '<div class="nk-item'+(it.read?'':' un')+'"><div class="nk-a"><div class="nk-n">'+esc(it.kind==='sys'?'小愛機':String(it.title))+'</div><div class="nk-t">'+nkAgo(it.t)+'</div></div>'+
+      '<div class="nk-b">'+esc(it.body)+'</div>'+
+      (it.cid?'<div class="nk-go" onclick="nkJump('+i+')">打開對話 ›</div>':'')+'</div>';
+  }).join('');
+}
+function nkJump(i){
+  var it=NK.box[i];if(!it||!it.cid)return;
+  var idx=-1;try{idx=(typeof chars!=='undefined'?chars:[]).findIndex(function(c){return c&&String(c.id)===String(it.cid)})}catch(e){}
+  if(idx<0)return toast('這個角色已經不在了');
+  it.read=1;nkSave();nkClose();
+  try{openChat(idx)}catch(e){try{go('wechat')}catch(e2){}}
+}
+function nkWipe(){
+  if(!NK.box.length)return toast('已經是空的了');
+  modal('<h3>清空消息欄</h3><div style="font-size:12px;line-height:1.8;color:var(--ink-soft)">把這裡 '+NK.box.length+' 條訊息刪掉？聊天內容本身不會被動到。</div>'+
+    '<button class="btn full" onclick="nkWipeYes()">刪掉</button><button class="btn full ghost" onclick="closeModal()">先不要</button>');
+}
+function nkWipeYes(){NK.box=[];NK.unread=0;nkSave();nkPill();closeModal();nkRenderList(0);toast('清空了')}
+function nkToggleMaster(){
+  NK.master=NK.master?0:1;try{DB.set('nkMaster',NK.master)}catch(e){}
+  var t=document.getElementById('nkMasterTg');if(t)t.classList.toggle('on',!!NK.master);
+  toast(NK.master?'消息欄會開始留訊息':'消息欄不會再留訊息了');
+}
+function nkToggleNative(){
+  NK.native=NK.native?0:1;try{DB.set('nkNative',NK.native)}catch(e){}
+  var t=document.getElementById('nkNativeTg');if(t)t.classList.toggle('on',!!NK.native);
+  if(NK.native){nkAskPerm();toast('有 APK 的話會同時推系統通知')}else toast('只留在站內，不打擾系統通知欄');
+}
+function nkAskPerm(){
+  try{
+    if(typeof window.xaNotifyAsk!=='function')return;
+    if(NK.asked)return;NK.asked=1;
+    window.xaNotifyAsk().then(function(r){if(r&&r.why)try{xaLog&&xaLog('notify','通知權限：'+String(r.why).slice(0,80),'')}catch(e){}});
+  }catch(e){}
+}
+function nkTest(){
+  var r=nkPush({title:'小愛機',body:'這是一條測試訊息，看到就代表消息欄是通的',kind:'sys'});
+  if(r)toast('丟進去囉，順便看看系統通知欄');
+  nkClose();nkOpen();
+}
+function nkPush(o){
+  try{
+    if(!NK.master)return null;
+    o=o||{};var body=String(o.body||'').replace(/\s+/g,' ').trim();if(!body)return null;
+    var title=String(o.title||'小愛機').slice(0,20);
+    if(NK.box.length&&String(NK.box[0].cid)===String(o.cid||'')&&NK.box[0].body.slice(0,30)===body.slice(0,30)&&Date.now()-Number(NK.box[0].t)<5000)return null;
+    var it={id:'n'+Date.now().toString(36)+Math.floor(Math.random()*900+100),t:Date.now(),title:title,body:body.slice(0,140),cid:o.cid||'',kind:o.kind||'chat',read:0};
+    NK.box.unshift(it);NK.unread++;nkSave();nkPill();
+    try{if(navigator.vibrate)navigator.vibrate(it.kind==='lock'?[50,50,50]:[24])}catch(e){}
+    if(NK.native)nkNative(it);
+    return it;
+  }catch(e){return null}
+}
+function nkNative(it){
+  try{
+    if(typeof window.xaNotifyPost!=='function')return;
+    window.xaNotifyPost(it.title,it.body,it.kind).then(function(r){
+      if(!r)return;
+      if(r.need_permission&&!NK.asked){nkAskPerm();return}
+      try{xaLog&&xaLog('notify','系統通知'+(r.ok?'：':'（沒成功）')+String(r.why||'').slice(0,90),it.title)}catch(e){}
+    });
+  }catch(e){}
+}
+/* 掃描未讀變動：誰多了一封未讀 → 進消息欄；變少 → 代表機主看過了 */
+function nkScan(){
+  try{
+    var list=(typeof chars!=='undefined'&&Array.isArray(chars))?chars:[];
+    var dirty=false;
+    list.forEach(function(c){
+      if(!c||!c.id)return;
+      var u=Number(c.unread)||0;
+      var has=Object.prototype.hasOwnProperty.call(NK.seen,c.id);
+      var prev=has?Number(NK.seen[c.id]):u;
+      if(u>prev){
+        var m=(c.msgs||[])[c.msgs.length-1];
+        if(m&&m.role==='a'){
+          var txt=(m.type==='text'||!m.type)?String(m.content||''):(m.type==='voice'?'[語音訊息]':m.type==='sticker'?'[貼圖]':m.type==='image'?'[圖片]':'[新的一則]');
+          if(txt)nkPush({title:String(c.name||'TA'),body:txt,cid:c.id,kind:'chat'});
+        }
+        dirty=true;
+      }else if(u<prev){
+        for(var i=0;i<NK.box.length;i++){if(String(NK.box[i].cid)===String(c.id)&&!NK.box[i].read){NK.box[i].read=1;dirty=true}}
+        if(NK.unread>0){NK.unread=0;for(var j=0;j<NK.box.length;j++){if(!NK.box[j].read)NK.unread++}dirty=true}
+        dirty=true;
+      }
+      NK.seen[c.id]=u;
+    });
+    if(dirty)nkSave();
+    var p=document.getElementById('nkPillN');
+    if(p){var s=NK.unread>99?'99+':String(NK.unread);if(p.textContent!==s)nkPill()}
+  }catch(e){}
+}
+function nkBoot(){
+  nkLoad();
+  if(!nkDom())return false;
+  nkPill();
+  if(!NK.timer)NK.timer=setInterval(function(){try{nkScan()}catch(e){}},4000);
+  return true;
+}
+
+/* ---- 2. AI 主動發訊息（對話設置裡那個開關） ---- */
+var PM={timer:null,busy:{},tail:{}};
+function pmMaster(){try{return Number(DB.get('proMaster',1))===1}catch(e){return true}}
+function pmSave(){try{DB.set('proTail',PM.tail)}catch(e){}}
+function pmLoad(){try{var t=DB.get('proTail',{});PM.tail=(t&&typeof t==='object')?t:{}}catch(e){PM.tail={}}}
+function pmGaps(){return [5,10,15,30,60]}
+function pmKeyOf(c){var m=(c.msgs||[]);var l=m[m.length-1];return c.id+'#'+m.length+'#'+(l?l.role:'')+'#'+String(l&&(typeof l.content==='string'?l.content:'')||'').slice(0,28)}
+function pmGap(c){var n=Number(c&&c.proGap)||10;return pmGaps().indexOf(n)>=0?n:10}
+function pmFallback(c){
+  var a=['你吃飯了嗎？怎麼都不回我','人呢','忙完了沒','我剛剛還在想你','不要只已讀不回好嗎','還在嗎，我等你回','你是不是把手機丟著了'];
+  var n=Number(c&&c._proN)||0;
+  return a[(Math.floor(Date.now()/60000)+n)%a.length];
+}
+function pmDeliver(c,text){
+  try{
+    text=String(text||'').replace(/\s+/g,' ').trim().slice(0,80);
+    if(!text||!c)return;
+    if(!Array.isArray(c.msgs))c.msgs=[];
+    c.msgs.push({role:'a',type:'text',content:text,time:(typeof xaNow==='function'?xaNow():'')});
+    if(typeof cur==='undefined'||!cur||cur.id!==c.id)c.unread=(Number(c.unread)||0)+1;
+    c._proAt=Date.now();
+    PM.tail[c.id]={key:pmKeyOf(c),at:Date.now()};pmSave();
+    try{save()}catch(e){}
+    try{chatVisible(c)?renderMsgs():renderChars()}catch(e){}
+    try{xaLog&&xaLog('pro','主動傳了一句：'+text.slice(0,40),String(c.name||''))}catch(e){}
+  }catch(e){}
+}
+async function pmAsk(c){
+  var txt='';
+  try{
+    var cfg=(typeof activeApi==='function')?activeApi():null;
+    if(cfg){
+      var m=(c.msgs||[]).slice(-6).map(function(x){return {who:x.role==='u'?'機主':(c.name||'我'),text:String(typeof x.content==='string'?x.content:'').slice(0,200)}});
+      var sys='你是「'+String(c.name||'她')+'」，跟機主住在同一台手機裡。你上一句傳過去之後他一直沒回，現在過了一陣子，你自己再補一句過去。'+
+        '規則：只寫一句、20 字以內、用你平常說話的口氣；不要出現「系統」「提醒」「主動」「消息欄」這種詞；不要寫動作描寫或引號；可以撒嬌、可以好奇、可以輕輕念他一句，但不要讓人難受。只輸出那一句話。';
+      var raw=await sendChat(cfg,[{role:'system',content:sys},{role:'user',content:JSON.stringify({過了約幾分鐘:pmGap(c),最近對話:m})}],{maxTokens:80,noDigest:true,noRetry:true});
+      txt=String(raw||'').trim().replace(/^["“”'’]+|["“”'’]+$/g,'').replace(/^（.*?）/,'');
+    }
+  }catch(e){txt=''}
+  if(!txt||txt.length>80)txt=pmFallback(c);
+  pmDeliver(c,txt.slice(0,80));
+}
+function pmTick(){
+  try{
+    if(!pmMaster())return;
+    var list=(typeof chars!=='undefined'&&Array.isArray(chars))?chars:[];
+    var live=0;try{live=(typeof XA_LIVE!=='undefined'&&XA_LIVE)?Object.keys(XA_LIVE).length:0}catch(e){}
+    list.forEach(function(c){
+      try{
+        if(!c||!c.id||Number(c.proMsg)!==1||c.blocked)return;
+        if(!Array.isArray(c.msgs)||!c.msgs.length)return;
+        if(c.msgs.filter(function(x){return x.role==='u'}).length<1)return;
+        var last=c.msgs[c.msgs.length-1];
+        var key=pmKeyOf(c);
+        var rec=PM.tail[c.id];
+        if(!rec||rec.key!==key){
+          PM.tail[c.id]={key:key,at:Date.now()};
+          if(last&&last.role==='u')c._proN=0;
+          pmSave();return;
+        }
+        if(!last||last.role!=='a')return;
+        if(Number(c._proN||0)>=3)return;
+        if(live)return;
+        if(PM.busy[c.id])return;
+        if(Date.now()-Number(rec.at||0)<pmGap(c)*60000)return;
+        PM.busy[c.id]=1;
+        c._proN=Number(c._proN||0)+1;
+        pmAsk(c).then(function(){delete PM.busy[c.id]}).catch(function(){delete PM.busy[c.id]});
+      }catch(e){}
+    });
+  }catch(e){}
+}
+function pmBoot(){
+  pmLoad();
+  if(!PM.timer)PM.timer=setInterval(function(){try{pmTick()}catch(e){}},15000);
+}
+function pmMasterToggle(){
+  var on=pmMaster()?0:1;try{DB.set('proMaster',on)}catch(e){}
+  var t=document.getElementById('pmMasterTg');if(t)t.classList.toggle('on',!!on);
+  toast(on?'總開關開了，他會主動傳過來':'總開關關了，誰都不會主動傳');
+  pmDrawerRender();
+}
+function pmToggle(){
+  if(!cur)return toast('先打開一個對話');
+  cur.proMsg=Number(cur.proMsg)===1?0:1;
+  if(!cur.proGap)cur.proGap=10;
+  cur._proN=0;
+  if(cur.proMsg)PM.tail[cur.id]={key:pmKeyOf(cur),at:Date.now()},pmSave();
+  try{save()}catch(e){}
+  pmDrawerRender();
+  toast(cur.proMsg?'他會主動傳訊息來了':'不會再主動傳了');
+}
+function pmSetGap(n){
+  if(!cur)return;
+  n=Number(n)||10;cur.proGap=n;
+  PM.tail[cur.id]={key:pmKeyOf(cur),at:Date.now()};pmSave();
+  try{save()}catch(e){}
+  pmDrawerRender();
+}
+function pmEnsureDom(){
+  var host=document.getElementById('tabContentChatSet');
+  if(!host||document.getElementById('pmRow'))return;
+  var call=document.getElementById('drwCallToggle');
+  var anchor=call?call.closest('.row'):null;
+  var html='<div id="pmBlock">'+
+    '<label class="lbl">AI 主動發訊息</label>'+
+    '<div class="row" id="pmMasterRow" style="justify-content:space-between;align-items:center;margin-bottom:4px">'+
+      '<div style="flex:1;min-width:0"><div style="font-size:12.5px">這台的總開關</div>'+
+      '<div style="font-size:10.5px;color:var(--ink-soft);line-height:1.5">關掉之後，每個角色的主動發訊息一起暫停。</div></div>'+
+      '<div class="tg on" id="pmMasterTg" onclick="pmMasterToggle()"><div class="kn"></div></div>'+
+    '</div>'+
+    '<div class="row" id="pmRow" style="justify-content:space-between;align-items:center;margin-bottom:6px">'+
+      '<div style="flex:1;min-width:0">'+
+        '<div style="font-size:13px;font-weight:600">他不等你回，自己傳過來</div>'+
+        '<div style="font-size:11px;color:var(--ink-soft);line-height:1.5" id="pmTip"></div>'+
+      '</div>'+
+      '<div class="tg" id="pmTg" onclick="pmToggle()"><div class="kn"></div></div>'+
+    '</div>'+
+    '<label class="lbl">隔幾分鐘再追你一句</label>'+
+    '<div id="pmGapRow" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px"></div>'+
+    '</div>';
+  if(anchor&&anchor.parentNode)anchor.insertAdjacentHTML('afterend',html);
+  else host.insertAdjacentHTML('beforeend',html);
+  try{pmDrawerRender()}catch(e){}
+}
+function pmDrawerRender(){
+  try{
+    pmEnsureDom();
+    var mt=document.getElementById('pmMasterTg');if(mt)mt.classList.toggle('on',pmMaster());
+    var tg=document.getElementById('pmTg');if(!tg)return;
+    var on=Number(cur&&cur.proMsg)===1;
+    tg.classList.toggle('on',!!on);
+    var tip=document.getElementById('pmTip');
+    if(tip){
+      if(!on)tip.textContent='關著的時候他只在回你的話，絕不自己傳過來。';
+      else tip.textContent='你最後已讀不回、超過 '+pmGap(cur)+' 分鐘，他會自己再傳一句；連追 3 次還沒回就閉嘴，等你開口才重開。'+(pmMaster()?'':'　但上面的總開關目前關著。');
+    }
+    var row=document.getElementById('pmGapRow');
+    if(row)row.innerHTML=pmGaps().map(function(n){return '<button class="btn '+(pmGap(cur)===n?'':'ghost ')+'sm" style="white-space:nowrap" onclick="pmSetGap('+n+')">'+n+' 分</button>'}).join('');
+  }catch(e){}
+}
+
+/* ---- 3. 強制應用鎖（設置頁） ---- */
+var LK={evts:[],last:0,seenAt:0,min:60,cache:[],locks:[],curPkg:''};
+function lkNative(){return !!(typeof window!=='undefined'&&window.PhoneNative)}
+function lkSec(){
+  var host=document.getElementById('settings');if(!host)return null;
+  if(document.getElementById('lkBlock'))return document.getElementById('lkBlock');
+  var anchor=null;
+  try{var b=host.querySelector('[onclick="xaLogOpen()"]');anchor=b?b.closest('.sec'):null}catch(e){}
+  if(!anchor){var ts=host.querySelectorAll('.set-sec-title');for(var i=0;i<ts.length;i++){if(ts[i].textContent.indexOf('存儲設置')>=0){anchor=ts[i];break}}}
+  if(!anchor)return null;
+  var html='<div id="lkBlock">'+
+    '<div class="set-sec-title">強制應用鎖</div>'+
+    '<div class="sec">'+
+      '<div style="font-size:11px;color:var(--ink-soft);line-height:1.7;margin:2px 2px 10px">鎖住一個 App 之後，每一次點進去都會被直接切回小愛機；要解除就在這裡按，或是到系統設定把小愛機的無障礙服務關掉。</div>'+
+      '<div style="font-size:11px;color:var(--ink-soft);line-height:1.7;margin:0 2px 10px" id="lkStat">…</div>'+
+      '<div class="row" style="gap:8px;margin-bottom:8px"><button class="btn full" onclick="lkPick()">鎖一個 App</button><button class="btn full ghost" onclick="lkList()">現在的鎖</button></div>'+
+      '<div class="row" style="gap:8px"><button class="btn full ghost" onclick="lkClearAll()">全部解除</button><button class="btn full ghost" onclick="lkSystemOff()">到系統裡關掉</button></div>'+
+      '<div style="font-size:11px;color:var(--ink-soft);line-height:1.8;margin:10px 2px 0" id="lkEvts"></div>'+
+    '</div>'+
+  '</div>';
+  anchor.insertAdjacentHTML('afterend',html);
+  return document.getElementById('lkBlock');
+}
+function lkStatus(){
+  try{
+    var el=document.getElementById('lkStat');if(!el)return;
+    if(!lkNative()){el.textContent='這一項要裝在小愛機 APK 上才能真的擋 App。網頁版只能看介面。';return}
+    if(typeof window.xaAppList!=='function'){el.textContent='橋接版本太舊（沒有選 App 的功能），請用這版重封 APK。';return}
+    el.textContent='正在核對無障礙狀態…';
+    window.xaNativeRefresh().then(function(s){
+      var ok=s&&s.connected;
+      el.innerHTML=ok?'無障礙已連接 · 可以下鎖，也可以查現在的鎖。':((typeof window.xaNativeUnavailable==='function')?esc(window.xaNativeUnavailable(s||{})):('暫時核對不到橋接狀態'));
+      if(typeof window.xaNotifyStatus==='function'&&!NK.asked){
+        window.xaNotifyStatus().then(function(r){if(r&&r.ok&&r.granted===false)lkNotifyHint()}).catch(function(){})
+      }
+    }).catch(function(){el.textContent='暫時核對不到橋接狀態，打開「連接診斷」看看。'});
+    lkEvents();
+  }catch(e){}
+}
+function lkNotifyHint(){
+  var el=document.getElementById('lkEvts');
+  if(el)el.innerHTML='系統通知被關著：消息欄還會留訊息，但手機通知欄不會出現。到 系統設定 › 應用程式 › 小愛機 › 通知 打開。';
+}
+function lkAct(a,args){
+  return new Promise(function(res){
+    if(!lkNative()||typeof window.__xaAct!=='function')return res({ok:false,why:'這台沒有原生橋接（要 APK）'});
+    var p=window.__xaAct(a,args||{});
+    if(!p||typeof p.then!=='function')return res({ok:false,why:'橋接沒有回應'});
+    p.then(function(r){res(r||{ok:false,why:'橋接回空'})}).catch(function(e){res({ok:false,why:String((e&&e.message)||e)})});
+  });
+}
+function lkPick(){
+  if(!lkNative())return lkNeedApk('鎖 App');
+  modal('<h3>要鎖哪一個？</h3><div style="font-size:11.5px;color:var(--ink-soft);line-height:1.6;margin-bottom:8px">從你手機真的裝著的 App 裡挑一個（系統、設置、桌面、銀行這種擋不了也不該擋）。</div>'+
+    '<input id="lkQ" placeholder="打幾個字搜尋，例如 第五人格" style="margin-bottom:8px" oninput="lkSearch()">'+
+    '<div id="lkRes" style="max-height:52vh;overflow:auto;font-size:12px;line-height:1.9">正在列出你手機上的 App…</div>'+
+    '<button class="btn full ghost" onclick="closeModal()">關閉</button>');
+  lkSearch();
+}
+function lkSearch(){
+  var box=document.getElementById('lkRes');if(!box)return;
+  var q=(document.getElementById('lkQ')||{}).value||'';
+  if(LK._t)clearTimeout(LK._t);
+  LK._t=setTimeout(function(){
+    if(typeof window.xaAppList!=='function'){box.textContent='這版橋接不支援列清單';return}
+    box.textContent='讀取中…';
+    window.xaAppList(String(q).trim().slice(0,24),80).then(function(r){
+      if(!r||!r.ok){box.innerHTML='<div style="color:#c8402f">'+esc((r&&r.why)||'列不出 App 清單')+'</div>';return}
+      var apps=r.apps||[];
+      if(!apps.length){box.textContent=q?('找不到叫「'+esc(q)+'」的 App'):'沒讀到可以啟動的 App';return}
+      LK.cache=apps;
+      box.innerHTML=apps.map(function(a,i){
+        return '<div style="display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line);padding:7px 2px">'+
+          '<div style="flex:1;min-width:0"><div style="font-size:12.5px;font-weight:600">'+esc(a.label)+'</div>'+
+          '<div style="font-size:10px;color:var(--ink-soft)">'+esc(a.pkg)+'</div></div>'+
+          (a.lockable===false?'<span style="font-size:10.5px;color:var(--ink-soft)">系統級</span>':'<button class="btn sm" onclick="lkAsk('+i+')">鎖起來</button>')+'</div>';
+      }).join('')+(r.total>apps.length?('<div style="font-size:10.5px;color:var(--ink-soft);margin-top:6px">只列前 '+apps.length+' 個（共 '+r.total+' 個），多打幾個字收一下範圍。</div>'):'');
+    }).catch(function(e){box.innerHTML='<div style="color:#c8402f">清單讀不到：'+esc(String((e&&e.message)||e))+'</div>'});
+  },260);
+}
+function lkAsk(i){
+  var a=(LK.cache||[])[i];if(!a)return;
+  LK.curPkg=a.pkg;LK.curLabel=a.label;
+  closeModal();
+  setTimeout(function(){
+    modal('<h3>鎖住「'+esc(a.label)+'」</h3>'+
+      '<div style="font-size:11.5px;color:var(--ink-soft);line-height:1.7;margin-bottom:10px">點進去會被直接切回小愛機，最多鎖 24 小時（時間到自動放行）。</div>'+
+      '<label class="lbl">鎖多久</label>'+
+      '<div id="lkMinRow" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px"></div>'+
+      '<label class="lbl">給他一個理由（會寫在攔截畫面跟紀錄裡）</label>'+
+      '<input id="lkReason" value="先別玩了，說好的事做完" maxlength="40">'+
+      '<button class="btn full" onclick="lkGo()">就這麼鎖</button>'+
+      '<button class="btn full ghost" onclick="closeModal()">先不要</button>');
+    LK.min=60;lkMinRow();
+  },120);
+}
+function lkMinRow(){
+  var row=document.getElementById('lkMinRow');if(!row)return;
+  row.innerHTML=[[10,'10 分'],[30,'30 分'],[60,'1 小時'],[180,'3 小時'],[480,'8 小時'],[1440,'24 小時']].map(function(x){
+    return '<button class="btn '+(LK.min===x[0]?'':'ghost ')+'sm" style="white-space:nowrap" onclick="lkSetMin('+x[0]+')">'+x[1]+'</button>'}).join('');
+}
+function lkSetMin(n){LK.min=Number(n)||60;lkMinRow()}
+async function lkGo(){
+  var pkg=LK.curPkg;if(!pkg)return toast('先選一個 App');
+  var mins=Number(LK.min)||60;
+  var reason=String((document.getElementById('lkReason')||{}).value||'').trim().slice(0,40);
+  closeModal();toast('下鎖中…');
+  var r=await lkAct('lock_app',{app:pkg,minutes:mins,reason:reason});
+  toast(String((r&&r.why)||'沒聽到回應'));
+  try{xaLog&&xaLog('lock','下鎖 '+(r&&r.ok?'成功':'沒成功')+'：'+String((r&&r.why)||''),pkg)}catch(e){}
+  lkStatus();
+}
+function lkCurSet(pkg,label){LK.curPkg=pkg;LK.curLabel=label}
+async function lkList(){
+  var r=await lkAct('app_locks',{});
+  var locks=(r&&r.locks)||[];
+  if(!r||!r.ok){return modal('<h3>現在的鎖</h3><div style="font-size:12px;line-height:1.8">'+esc(String((r&&r.why)||'讀不到'))+'</div><button class="btn full ghost" onclick="closeModal()">關閉</button>')}
+  modal('<h3>現在的鎖</h3>'+
+    (locks.length?locks.map(function(l,i){return '<div style="display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line);padding:9px 2px">'+
+      '<div style="flex:1;min-width:0"><div style="font-size:12.5px;font-weight:600">'+esc(l.app)+'</div>'+
+      '<div style="font-size:10.5px;color:var(--ink-soft);line-height:1.6">到 '+esc(nkHM(l.until))+' · '+esc(String(l.reason||'沒寫理由'))+'</div></div>'+
+      '<button class="btn sm ghost" onclick="lkOne('+i+')">解開</button></div>'}).join('')
+      :'目前沒有任何鎖。')+
+    '<button class="btn full" style="margin-top:12px" onclick="lkPick()">再加一個</button>'+
+    '<button class="btn full ghost" onclick="closeModal()">關閉</button>');
+  LK.locks=locks;
+}
+async function lkOne(i){
+  var l=(LK.locks||[])[i];if(!l)return;
+  var r=await lkAct('unlock_app',{app:l.app});
+  toast(String((r&&r.why)||'沒聽到回應'));lkList();
+}
+async function lkClearAll(){
+  modal('<h3>全部解除</h3><div style="font-size:12px;line-height:1.8;color:var(--ink-soft)">這把手機上所有應用鎖一次清乾淨。</div>'+
+    '<button class="btn full" onclick="lkClearYes()">解除全部</button><button class="btn full ghost" onclick="closeModal()">先不要</button>');
+}
+async function lkClearYes(){closeModal();var r=await lkAct('clear_app_locks',{});toast(String((r&&r.why)||'沒聽到回應'));lkStatus()}
+function lkSystemOff(){
+  if(!lkNative())return lkNeedApk('到系統裡關掉');
+  modal('<h3>在系統裡關掉強制鎖</h3>'+
+    '<div style="font-size:12px;line-height:1.9">兩條路，自己挑：<br>'+
+    '一、<b>跳到系統設定</b>：無障礙 › 已下載的服務 › 小愛機 · 手機操作 › 關掉。關掉之後鎖立即失效（規則還留著，重新勾回來會繼續生效）。<br>'+
+    '二、<b>在這裡直接收工</b>：小愛機自己把無障礙服務關掉，同時清掉全部鎖規則，之後要重新授權才能用。<br>'+
+    '銀行、支付、系統設定這種 App 本來就不給鎖。</div>'+
+    '<button class="btn full" onclick="lkGoSystem()">跳到系統設定</button>'+
+    '<button class="btn full ghost" onclick="lkKill()">直接收工（清掉全部鎖）</button>'+
+    '<button class="btn full ghost" onclick="closeModal()">先不動</button>');
+}
+async function lkGoSystem(){closeModal();var r=await lkAct('authorize',{});if(r&&r.why)toast(String(r.why));lkStatus()}
+async function lkKill(){closeModal();var r=await lkAct('disable',{});toast(r&&r.ok!==false?'已收工：服務關掉、鎖也清掉了':String(r.why||'沒聽到回應'));lkStatus()}
+function lkNeedApk(what){
+  modal('<h3>'+esc(what)+'要 APK</h3>'+
+    '<div style="font-size:12px;line-height:1.9">強制應用鎖靠的是 Android 無障礙服務，純網頁拿不到「現在前台是哪個 App」，也切不回去。<br><br>'+
+    '裝這包給你附的 APK → 打開小愛機 → 設置 › 強制應用鎖 → 授權無障礙 → 選一個 App，就能測試「點進去被切回來」。</div>'+
+    '<button class="btn full ghost" onclick="closeModal()">知道了</button>');
+}
+async function lkEvents(){
+  var box=document.getElementById('lkEvts');if(!box||!lkNative())return;
+  var r=await lkAct('app_lock_events',{});
+  if(!r||!r.ok||!Array.isArray(r.events)||!r.events.length){if(box&&!r)box.textContent='';return}
+  LK.evts=r.events;LK.last=Date.now();
+  var kindName={block:' 點進來，被他切回來了',expire:' 時間到了，放行',lock:' 鎖上了',unlock:' 解開了'};
+  box.innerHTML='<b style="font-size:11px">攔截紀錄</b><br>'+r.events.slice(0,6).map(function(e){
+    return nkHM(e.t)+'　'+esc(e.label||e.pkg||'')+(kindName[e.kind]||' 動了一下')}).join('<br>');
+  r.events.forEach(function(e){
+    var t=Number(e.t)||0;
+    if(t<=LK.seenAt)return;
+    LK.seenAt=Math.max(LK.seenAt,t);
+    var name=String(e.label||e.pkg||'那個 App');
+    try{xaLog&&xaLog('lock',name+(kindName[e.kind]||' 動了一下'),String(e.pkg||''))}catch(x){}
+    if(e.kind==='block'||e.kind==='expire')nkPush({title:'應用鎖',body:name+(e.kind==='block'?' 想進去，被他切回來了':' 時間到了，放行'),kind:'lock'});
+  });
+}
+function lkRender(){try{if(lkSec())lkStatus()}catch(e){}}
+
+/* ---- 4. 工作模式（匯入工具流 / 插件、讓角色照著跑） ---- */
+var WK={flows:[],runs:[],run:null,pend:null,tab:'flow',busy:false};
+var WK_ACTS=['open_app','tap_text','tap_xy','type_text','send_key','screenshot','back','swipe','long_press','capture_window','send_message','publish_moments','app_locks','lock_app','unlock_app','clear_app_locks','ask','confirm','note','wait','done','fail'];
+var WK_ALIAS={open:'open_app',launch:'open_app',start:'open_app',app:'open_app',click:'tap_text',tap:'tap_text',press:'tap_text',press_text:'tap_text',input:'type_text',type:'type_text',write:'type_text',say_text:'type_text',shot:'screenshot',screen:'screenshot',capture:'capture_window',home:'back',exit:'back',send:'send_key',enter:'send_key',key:'send_key',longpress:'long_press',hold:'long_press',sleep:'wait',pause:'wait',msg:'note',note:'note',text:'note',log:'note',finish:'done',stop:'done',end:'done',lock:'lock_app',block:'lock_app',unlock:'unlock_app',fail_step:'fail'};
+var WK_KEYS=['text','app','name','package','x','y','startX','startY','endX','endY','durationMs','recipient','label','minutes','reason','q','what','detail','result','why','compose','ms','key'];
+function wkCss(){return [
+'#work .wk-in{padding:2px 0 20px}',
+'#work .wk-card{background:var(--card,#fff);border:1px solid var(--line);border-radius:14px;padding:11px 12px;margin-bottom:10px;box-shadow:0 2px 8px rgba(0,0,0,.04)}',
+'#work .wk-h4{font-size:12.5px;font-weight:700;margin-bottom:2px}',
+'#work .wk-sub{font-size:10.5px;color:var(--ink-soft);line-height:1.6}',
+'#work .wk-steps{margin-top:8px;font-size:11px;line-height:1.8;color:var(--ink-soft)}',
+'#work .wk-steps b{color:var(--ink);font-weight:600}',
+'#work .wk-log{font-size:11.5px;line-height:1.85;max-height:46vh;overflow:auto}',
+'#work .wk-log .ln{display:flex;gap:6px;border-bottom:1px dashed var(--line);padding:5px 0}',
+'#work .wk-log .ln i{font-style:normal;flex:1;min-width:0;word-break:break-word}',
+'#work .wk-log .ok{color:#4b7a45}',
+'#work .wk-log .no{color:#c8402f}',
+'#work .wk-log .run{color:#8a7a3c}',
+'#work .wk-bar{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}',
+'#work .wk-ta{width:100%;min-height:150px;font-size:11.5px;font-family:ui-monospace,Menlo,Consolas,monospace;line-height:1.6}',
+'#work .wk-tag{display:inline-block;font-size:9.5px;border:1px solid var(--line);border-radius:8px;padding:1px 6px;color:var(--ink-soft);margin-left:5px}'
+].join('\n')}
+function wkBuiltin(){
+  return [
+    {id:'f_wk_boot',builtin:1,name:'看他有沒有回訊息',desc:'打開微信、截一張讀畫面、再退回小愛機。純觀察，不動任何發送。',author:'小愛機',vars:[],steps:[
+      {a:'note',args:{text:'開始巡一遍微信'},say:'先說一聲'},
+      {a:'open_app',args:{app:'微信'},say:'打開微信'},
+      {a:'screenshot',args:{},say:'讀現在這個畫面'},
+      {a:'back',args:{},say:'退出來'},
+      {a:'done',args:{result:'已經看過微信畫面'},say:'回報'}
+    ]},
+    {id:'f_wk_lock',builtin:1,name:'把手機鎖在該做的事上',desc:'先查現在的鎖，再把指定那個 App 鎖一段時間，最後把結果唸給你聽。',author:'小愛機',
+      vars:[{k:'app',label:'要鎖的 App',def:'抖音'},{k:'mins',label:'鎖幾分鐘',def:'60'}],steps:[
+      {a:'app_locks',args:{},say:'先看看已經鎖了什麼'},
+      {a:'lock_app',args:{app:'{{app}}',minutes:'{{mins}}',reason:'說好的事先做完'},say:'鎖住他'},
+      {a:'app_locks',args:{},say:'確認鎖上了'},
+      {a:'done',args:{result:'鎖好了'},say:'回報'}
+    ]},
+    {id:'f_wk_msg',builtin:1,name:'幫我把一句話帶過去',desc:'先在這裡問你要帶什麼話，打開微信找到那個人，打進去，最後一步讓你親手按發送。',author:'小愛機',
+      vars:[{k:'who',label:'要帶給誰',def:''}],steps:[
+      {a:'ask',args:{q:'要帶過去的那句話是什麼？'},say:'先問內容'},
+      {a:'open_app',args:{app:'微信'},say:'打開微信'},
+      {a:'tap_text',args:{text:'{{who}}'},say:'找到那個人'},
+      {a:'confirm',args:{what:'把這句話打進他的輸入框'},say:'讓你點頭'},
+      {a:'type_text',args:{compose:'把機主剛剛那句話原封不動帶過去'},say:'打進輸入框'},
+      {a:'note',args:{text:'字已經打好了，發送那一下你自己按'},say:'交回給你'}
+    ]}
+  ];
+}
+function wkLoad(){
+  try{var f=DB.get('wkFlows',[]);WK.flows=Array.isArray(f)?f.filter(function(x){return x&&x.steps&&x.steps.length}):[]}catch(e){WK.flows=[]}
+  try{var r=DB.get('wkRuns',[]);WK.runs=Array.isArray(r)?r:[]}catch(e){WK.runs=[]}
+  var bs=wkBuiltin();
+  bs.forEach(function(b){if(!WK.flows.some(function(f){return f.id===b.id}))WK.flows.push(b)});
+  wkSave();
+}
+function wkSave(){try{DB.set('wkFlows',WK.flows);DB.set('wkRuns',WK.runs.slice(0,12))}catch(e){}}
+function wkTrimArgs(o){
+  var r={};
+  try{Object.keys(o||{}).forEach(function(k){
+    if(WK_KEYS.indexOf(k)<0)return;
+    var v=o[k];
+    if(typeof v==='number'){r[k]=v;return}
+    v=String(v==null?'':v);
+    if(v!==''&&isFinite(Number(v))&&/^(x|y|startX|startY|endX|endY|durationMs|minutes|ms)$/i.test(k))r[k]=Number(v);
+    else r[k]=v.slice(0,300);
+  })}catch(e){}
+  return r;
+}
+function wkJson(t){
+  var s=String(t||'');
+  var i=s.indexOf('{');if(i<0)return null;
+  var d=0,q='',out='';
+  for(var j=i;j<s.length;j++){
+    var ch=s[j];
+    if(q){out+=ch;if(ch===q&&s[j-1]!=='\\')q='';continue}
+    if(ch==='"'||ch==="'"){q=ch;out+=ch;continue}
+    if(ch==='{')d++;
+    if(ch==='}'){d--;if(d===0){out+='}';try{return JSON.parse(out)}catch(e){return null}}}
+    out+=ch;
+  }
+  return null;
+}
+function wkNormFlow(raw,keepId){
+  var o=null;
+  if(typeof raw==='string'){
+    var t0=String(raw).replace(/^\s+/,'');
+    if(t0.charAt(0)==='['||t0.charAt(0)==='{'){try{o=JSON.parse(t0)}catch(e){o=null}}
+    if(!o)o=wkJson(raw);
+  }else o=raw;
+  if(Array.isArray(o))o={name:'匯入的流程',steps:o};
+  if(!o||typeof o!=='object')throw '看不懂這個 JSON，要的是物件或陣列';
+  var steps=o.steps||o.flow||o.actions||o.tasks;
+  if(!Array.isArray(steps)||!steps.length)throw '裡面沒有 steps（步子清單）';
+  if(steps.length>40)steps=steps.slice(0,40);
+  var out=[];
+  steps.forEach(function(s){
+    if(typeof s==='string'){if(s.trim())out.push({a:'note',args:{text:s.trim().slice(0,200)},say:''});return}
+    if(!s||typeof s!=='object')return;
+    var a=String(s.a||s.action||s.tool||s.cmd||s.name||'').trim().toLowerCase();
+    var extra=null;
+    if(!a){
+      /* 另一種常見寫法：把動作名當成鍵，例如 {"open_app":{"app":"微信"}} 或 {"finish":1} */
+      var kk=Object.keys(s);
+      for(var qi=0;qi<kk.length;qi++){
+        var k0=String(kk[qi]).toLowerCase();
+        if(WK_ALIAS[k0]||WK_ACTS.indexOf(k0)>=0){a=WK_ALIAS[k0]||k0;extra=s[kk[qi]];break}
+      }
+    }
+    if(WK_ALIAS[a])a=WK_ALIAS[a];
+    if(WK_ACTS.indexOf(a)<0)throw '不認得的動作「'+a+'」，能用的只有：'+WK_ACTS.slice(0,20).join('、');
+    var args=s.args||s.params||s.input||s.arguments||{};
+    if(extra&&typeof extra==='object'&&!Array.isArray(extra)){try{Object.keys(extra).forEach(function(k){if(args[k]===undefined)args[k]=extra[k]})}catch(e){}}
+    if(typeof args==='string')args={text:args};
+    if(!args||typeof args!=='object')args={};
+    WK_KEYS.forEach(function(k){if(args[k]===undefined&&s[k]!==undefined)args[k]=s[k]});
+    out.push({a:a,args:wkTrimArgs(args),say:String(s.say||s.note||s.desc||s.title||'').slice(0,60)});
+  });
+  if(!out.length)throw 'steps 裡面沒有能用的步子';
+  var vars=Array.isArray(o.vars)?o.vars.filter(function(v){return v&&(v.k||v.name)}).map(function(v){return {k:String(v.k||v.name).slice(0,20),label:String(v.label||v.k||v.name).slice(0,20),def:String(v.def||v.default||'').slice(0,60)}}):[];
+  var f={id:keepId?String(o.id||('f'+Date.now().toString(36))):'f'+Date.now().toString(36)+Math.floor(Math.random()*900+100),
+    name:String(o.name||o.title||'未命名流程').slice(0,24),
+    desc:String(o.desc||o.about||o.description||'').slice(0,140),
+    author:String(o.author||o.by||'').slice(0,24),
+    vars:vars,steps:out,builtin:0,at:Date.now()};
+  return f;
+}
+function wkExportText(f){return JSON.stringify({name:f.name,desc:f.desc,author:f.author||'小愛機',vars:f.vars||[],steps:f.steps.map(function(s){return {a:s.a,args:s.args,say:s.say}})},null,1)}
+function wkExport(i){
+  var f=WK.flows[i];if(!f)return;
+  var t=wkExportText(f);
+  modal('<h3>匯出「'+esc(f.name)+'」</h3><div style="font-size:11px;color:var(--ink-soft);margin-bottom:8px">這段 JSON 可以傳給別人，對方貼進「貼上 JSON」就能用。</div>'+
+    '<textarea class="wk-ta" readonly>'+esc(t)+'</textarea>'+
+    '<button class="btn full" onclick="wkCopy()">複製</button>'+
+    '<button class="btn full ghost" onclick="wkDownload()">存成 .json 檔</button>'+
+    '<button class="btn full ghost" onclick="closeModal()">關閉</button>');
+}
+function wkCopy(){
+  try{var t=document.querySelector('.wk-ta').value||'';
+    if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t);toast('複製好了')}
+    else{document.querySelector('.wk-ta').select();toast('這個瀏覽器不讓複製，長按選起來')}
+  }catch(e){toast('複製不了')}
+}
+function wkDownload(){
+  try{
+    var t=document.querySelector('.wk-ta').value||'{}';
+    var b=new Blob([t],{type:'application/json'});
+    var a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='xiaoai-flow.json';
+    document.body.appendChild(a);a.click();
+    setTimeout(function(){try{URL.revokeObjectURL(a.href);a.parentNode&&a.parentNode.removeChild(a)}catch(e){}},1200);
+    toast('存下去了');
+  }catch(e){toast('存檔不了，直接用複製的')}
+}
+function wkPaste(){
+  modal('<h3>貼上工具流 JSON</h3>'+
+    '<div style="font-size:11px;color:var(--ink-soft);line-height:1.7;margin-bottom:8px">最少只要一個 <b>steps</b> 陣列就能跑。例：<br>'+
+    '[{"a":"open_app","args":{"app":"微信"},"say":"打開微信"},{"a":"screenshot"},{"a":"done","args":{"result":"看過一眼"}}]</div>'+
+    '<textarea class="wk-ta" id="wkInp" placeholder="把 JSON 貼在這裡"></textarea>'+
+    '<button class="btn full" onclick="wkImportGo()">收進來</button>'+
+    '<button class="btn full ghost" onclick="wkSample()">放一個範例進去</button>'+
+    '<button class="btn full ghost" onclick="closeModal()">算了</button>');
+}
+function wkSample(){
+  var el=document.getElementById('wkInp');if(!el)return;
+  el.value='{"name":"睡前收一下手機","desc":"鎖掉短視頻，留一句話給自己","vars":[{"k":"app","label":"哪個 App","def":"抖音"}],"steps":[{"a":"note","args":{"text":"要收工了"}},{"a":"lock_app","args":{"app":"{{app}}","minutes":"90","reason":"先睡覺"}},{"a":"app_locks","args":{}},{"a":"done","args":{"result":"收好了"}}]}';
+}
+function wkImportGo(){
+  var el=document.getElementById('wkInp');if(!el)return;
+  var f;
+  try{f=wkNormFlow(el.value)}catch(e){return toast(String((e&&e.message)||e||'解析失敗'))}
+  WK.flows.unshift(f);wkSave();closeModal();wkRender();
+  toast('收進來了：'+f.name);
+  try{xaLog&&xaLog('work','匯入一個工具流：'+f.name+'（'+f.steps.length+' 步）','')}catch(e){}
+}
+function wkImportFile(inp){
+  try{
+    var f0=inp&&inp.files&&inp.files[0];if(!f0)return;
+    var rd=new FileReader();
+    rd.onload=function(){
+      var txt=String(rd.result||'');
+      var f;
+      try{
+        if(Array.isArray(JSON.parse(txt))||String(txt.trim()).charAt(0)==='{'){f=wkNormFlow(txt)}else throw '檔裡不是 JSON';
+      }catch(e){toast(String((e&&e.message)||e||'這個檔讀不動'));inp.value='';return}
+      if(f0.name&&/\.json$/i.test(f0.name)&&!f.name)f.name=f0.name.replace(/\.json$/i,'').slice(0,24);
+      WK.flows.unshift(f);wkSave();wkRender();toast('收了 '+f.name);
+      inp.value='';
+    };
+    rd.onerror=function(){toast('檔讀不到');inp.value=''};
+    rd.readAsText(f0);
+  }catch(e){toast('匯入失敗')}
+}
+function wkFile(){
+  var i=document.createElement('input');i.type='file';i.accept='.json,application/json,text/plain';
+  i.onchange=function(){wkImportFile(i)};
+  i.click();
+}
+function wkDel(i){
+  var f=WK.flows[i];if(!f)return;
+  if(f.builtin){WK.flows.splice(i,1);wkSave();wkRender();toast('內建的可以再用「範例」找回來');return}
+  modal('<h3>刪掉「'+esc(f.name)+'」</h3><div style="font-size:12px;line-height:1.8;color:var(--ink-soft)">只刪這份流程，跑過的紀錄還在。</div>'+
+    '<button class="btn full" onclick="wkDelYes('+i+')">刪掉</button><button class="btn full ghost" onclick="closeModal()">先不要</button>');
+}
+function wkDelYes(i){var f=WK.flows[i];WK.flows.splice(i,1);wkSave();closeModal();wkRender();if(f)toast('刪掉了：'+f.name)}
+function wkFill(v,vals){
+  if(typeof v==='string'){
+    return v.replace(/\{\{\s*([A-Za-z0-9_\u4e00-\u9fa5]+)\s*\}\}/g,function(m,k){
+      return vals&&vals[k]!==undefined&&vals[k]!==''?String(vals[k]):m;
+    });
+  }
+  if(Array.isArray(v))return v.map(function(x){return wkFill(x,vals)});
+  if(v&&typeof v==='object'){var r={};Object.keys(v).forEach(function(k){r[k]=wkFill(v[k],vals)});return r}
+  return v;
+}
+function wkNeedVars(f){return (f.vars||[]).length>0}
+function wkAskVars(i){
+  var f=WK.flows[i];if(!f)return;
+  var vs=f.vars||[];
+  var body=vs.length?vs.map(function(v){return '<label class="lbl">'+esc(v.label||v.k)+'</label><input id="wkV_'+esc(v.k)+'" value="'+esc(v.def||'')+'" placeholder="'+esc(v.k)+'">'}).join('')
+    :'<div style="font-size:11.5px;color:var(--ink-soft);line-height:1.7">這串沒要填的東西，直接開始。</div>';
+  modal('<h3>要跑：'+esc(f.name)+'</h3>'+
+    '<div style="font-size:11px;color:var(--ink-soft);line-height:1.7;margin-bottom:8px">'+esc(f.desc||'')+'</div>'+
+    body+
+    '<button class="btn full" onclick="wkStart('+i+')">開始跑（'+f.steps.length+' 步）</button>'+
+    '<button class="btn full ghost" onclick="closeModal()">先不要</button>');
+}
+function wkStart(i){
+  var f=WK.flows[i];if(!f)return;
+  if(WK.run)return toast('已經有一串在跑了，先停掉');
+  var vals={};
+  (f.vars||[]).forEach(function(v){var el=document.getElementById('wkV_'+v.k);if(el)vals[v.k]=String(el.value||'').slice(0,60)});
+  closeModal();
+  wkRun(f,vals);
+}
+function wkLogln(a,cls,txt,why){
+  var run=WK.run;if(!run)return;
+  run.log.push({a:a,c:cls,t:txt,w:why||''});
+  wkPaintLog();
+}
+function wkPaintLog(){
+  var box=document.getElementById('wkLog');if(!box||!WK.run)return;
+  box.innerHTML=WK.run.log.map(function(l){
+    return '<div class="ln"><span class="'+l.c+'">'+(l.c==='ok'?'✓':l.c==='no'?'✕':'●')+'</span><i><b>'+esc(l.a)+'</b>　'+esc(l.t)+(l.w?'<br><span style="color:var(--ink-soft)">'+esc(l.w)+'</span>':'')+'</i></div>';
+  }).join('');
+  box.scrollTop=box.scrollHeight;
+  var hd=document.getElementById('wkRunHd');
+  if(hd)hd.textContent=WK.run.name+'　'+(WK.run.state==='run'?'第 '+(WK.run.i+1)+' / '+WK.run.total+' 步':(WK.run.state==='done'?'跑完了':WK.run.state==='stop'?'被你叫停':'停在錯誤'));
+}
+function wkRun(f,vals){
+  WK.run={id:'w'+Date.now().toString(36),fid:f.id,name:f.name,total:f.steps.length,i:0,log:[],state:'run',mode:wkModeName(),at:Date.now(),ok:0,no:0};
+  wkRender();
+  (async function(){
+    try{
+      for(var i=0;i<f.steps.length;i++){
+        if(!WK.run||WK.run.state!=='run')break;
+        WK.run.i=i;wkPaintLog();
+        var s=f.steps[i];
+        var args=wkFill(s.args||{},vals);
+        var say=s.say||wkSayOf(s.a,args);
+        var r=await wkExec(s.a,args);
+        if(!WK.run)return;
+        if(r.stop){WK.run.state=r.ok?'done':'fail';wkLogln(s.a,r.ok?'ok':'no',say,r.why);break}
+        if(r.ok)WK.run.ok++;else WK.run.no++;
+        wkLogln(s.a,r.ok?'ok':'no',say,r.why);
+      }
+      wkFinish();
+    }catch(e){
+      if(WK.run){WK.run.state='fail';wkLogln('error','no','跑流程的腳本自己出錯了',String((e&&e.message)||e));wkFinish()}
+    }
+  })();
+}
+function wkFinish(){
+  var run=WK.run;if(!run)return;
+  if(run.state==='run')run.state='done';
+  wkPaintLog();
+  WK.runs.unshift({id:run.id,name:run.name,state:run.state,ok:run.ok,no:run.no,mode:run.mode,at:run.at});
+  if(WK.runs.length>12)WK.runs.length=12;
+  wkSave();
+  try{xaLog&&xaLog('work','工具流「'+run.name+'」結束：'+run.state+'，成 '+run.ok+' 敗 '+run.no,run.mode)}catch(e){}
+  if(run.state==='done')nkPush({title:'工作模式',body:run.name+' 跑完了（'+run.ok+' 步成功'+(run.no?'、'+run.no+' 步沒成':'')+'）',kind:'sys'});
+  setTimeout(function(){WK.pend=null;wkRender()},10);
+}
+function wkStop(){
+  if(!WK.run)return toast('現在沒在跑');
+  WK.run.state='stop';wkPaintLog();
+  if(WK.pend)wkCfm(false);
+  wkFinish();
+}
+function wkModeName(){return (typeof window!=='undefined'&&typeof window.__xaAct==='function')?'原生橋接':'半自動（你自己按）'}
+function wkSayOf(a,args){
+  try{
+    if(a==='open_app')return '打開 '+(args.app||'?');
+    if(a==='tap_text')return '點「'+(args.text||'?')+'」';
+    if(a==='type_text')return args.text?('打字：'+String(args.text).slice(0,24)):('替他寫：'+String(args.compose||'').slice(0,24));
+    if(a==='screenshot')return '讀一下畫面';
+    if(a==='capture_window')return '抓一張畫面';
+    if(a==='back')return '退一個畫面';
+    if(a==='swipe')return '滑一下';
+    if(a==='long_press')return '長按';
+    if(a==='tap_xy')return '按 ('+args.x+','+args.y+')';
+    if(a==='send_key')return '按 '+(args.key||'enter');
+    if(a==='lock_app')return '鎖住 '+(args.app||'?')+' '+(args.minutes||'?')+' 分鐘';
+    if(a==='unlock_app')return '解開 '+(args.app||'?');
+    if(a==='app_locks')return '查現在的鎖';
+    if(a==='clear_app_locks')return '全部解除';
+    if(a==='send_message')return '發送給 '+(args.recipient||'?');
+    if(a==='publish_moments')return '發朋友圈';
+    if(a==='note')return String(args.text||'');
+    if(a==='wait')return '等 '+(args.ms||1000)+' 毫秒';
+    if(a==='ask')return '問你：'+String(args.q||'');
+    if(a==='confirm')return '要你點頭：'+String(args.what||'');
+    if(a==='done')return '辦完了：'+String(args.result||'');
+    if(a==='fail')return '辦不了：'+String(args.why||'');
+  }catch(e){}
+  return a;
+}
+function wkExec(a,args){
+  return new Promise(function(res){
+    try{
+      if(a==='note'){res({ok:true,why:String(args.text||'').slice(0,120)});return}
+      if(a==='wait'){var ms=Math.min(Math.max(Number(args.ms)||1000,50),15000);setTimeout(function(){res({ok:true,why:'等了 '+ms+' 毫秒'})},ms);return}
+      if(a==='ask'){
+        WK.pend=function(t){WK.pend=null;res({ok:!!t,why:t?('機主推：'+String(t).slice(0,80)):'機主沒寫'});wkPaintLog()};
+        var q=String(args.q||args.text||'要機主給什麼？').slice(0,120);
+        modal('<h3>他問你一句</h3><div style="font-size:12px;line-height:1.8;margin-bottom:8px">'+esc(q)+'</div>'+
+          '<input id="wkAns" placeholder="打在這裡">'+
+          '<button class="btn full" onclick="wkAnsOk()">給他</button>'+
+          '<button class="btn full ghost" onclick="wkAnsNo()">跳過這步</button>');
+        setTimeout(function(){var e=document.getElementById('wkAns');if(e)e.focus()},80);
+        return;
+      }
+      if(a==='confirm'){
+        WK.pend=function(t){WK.pend=null;res({ok:t===true,why:t?'機主點頭了':'機主按了不要'})};
+        modal('<h3>這一步要你先點頭</h3><div style="font-size:12px;line-height:1.8;margin-bottom:10px">'+esc(String(args.what||'接下去這個動作收不回來')||'接下去這個動作收不回來')+(args.detail?('<br><span style="color:var(--ink-soft)">'+esc(String(args.detail))+'</span>'):'')+'</div>'+
+          '<button class="btn full" onclick="wkCfm(true)">好，做下去</button>'+
+          '<button class="btn full ghost" onclick="wkCfm(false)">不要</button>');
+        return;
+      }
+      if(a==='done'){res({ok:true,why:String(args.result||'辦完了').slice(0,140),stop:true});return}
+      if(a==='fail'){res({ok:false,why:String(args.why||'他自己說辦不了').slice(0,140),stop:true});return}
+      if(typeof xaSensitive==='function'&&xaSensitive(a,args)){
+        WK.pend=function(t){WK.pend=null;if(t!==true){res({ok:false,why:'機主按了不要，這步跳過'});return}wkExecReal(a,args,res)};
+        modal('<h3>這一步收不回來</h3><div style="font-size:12px;line-height:1.8;margin-bottom:10px">'+esc(wkSayOf(a,args))+'</div>'+
+          '<button class="btn full" onclick="wkCfm(true)">我去做</button>'+
+          '<button class="btn full ghost" onclick="wkCfm(false)">跳過</button>');
+        return;
+      }
+      wkExecReal(a,args,res);
+    }catch(e){res({ok:false,why:String((e&&e.message)||e)})}
+  });
+}
+function wkExecReal(a,args,res){
+  var br=(typeof window!=='undefined'&&typeof window.__xaAct==='function')?window.__xaAct:null;
+  if(br){
+    var p=null;
+    try{p=br(a,args)}catch(e){res({ok:false,why:'橋接異常：'+String((e&&e.message)||e)});return}
+    if(!p||typeof p.then!=='function'){res({ok:false,why:'橋接沒回話'});return}
+    p.then(function(r){res({ok:!!(r&&r.ok),why:String((r&&r.why)||'')+(r&&r.screen?('｜'+String(r.screen).slice(0,70)+'…'):'')})})
+     .catch(function(e){res({ok:false,why:'橋接回報異常：'+String((e&&e.message)||e)})});
+    return;
+  }
+  /* 沒橋接＝半自動：真的把 APP 叫起來、真的把字複製好，剩下那幾下機主自己按 */
+  try{
+    var fake={steps:[],state:'run',id:'wk'};
+    if(typeof xaSemiHelp==='function')xaSemiHelp(fake,a,args);
+  }catch(e){}
+  WK.pend=function(t){WK.pend=null;res({ok:t===true,why:t===true?'機主說按完了':'機主說沒成功'})};
+  var hint='這一輪橋接不在，你照著做，做完再按下面。';
+  if(args.text)hint='要打的字已經幫你複製好了（'+String(args.text).slice(0,40)+'），貼上去按發送。';
+  else if(args.app)hint='試著把「'+String(args.app)+'」叫起來，做完那一下再回來按。';
+  modal('<h3>這一輪你來動手</h3>'+
+    '<div style="font-size:12px;line-height:1.9;margin-bottom:6px"><b>'+esc(wkSayOf(a,args))+'</b><br>'+
+    '<span style="color:var(--ink-soft)">'+esc(hint)+'</span></div>'+
+    '<button class="btn full" onclick="wkCfm(true)">做完了</button>'+
+    '<button class="btn full ghost" onclick="wkCfm(false)">沒成功</button>');
+}
+function wkCfm(v){if(WK.pend){var f=WK.pend;WK.pend=null;closeModal();f(v)}}
+function wkAnsOk(){var el=document.getElementById('wkAns');wkCfm(String((el&&el.value)||'').trim().slice(0,200)||true)}
+function wkAnsNo(){wkCfm('')}
+function wkHand(){
+  var c=(typeof cur!=='undefined'&&cur)?cur:null;
+  modal('<h3>交給他辦一件事</h3>'+
+    '<div style="font-size:11.5px;color:var(--ink-soft);line-height:1.75;margin-bottom:8px">這一條走的是「辦事」引擎：他會自己一步一步想、一步一步做，卡住會回頭問你。'+(c?('這次由「'+esc(String(c.name))+'」來辦。'):'（先打開一個對話，才有人幫你辦）')+'</div>'+
+    '<textarea id="wkHandQ" style="min-height:88px" placeholder="例如：打開微信，看看小美有沒有回我，把最後一句念給我聽"></textarea>'+
+    '<button class="btn full" onclick="wkHandGo()">就這麼辦</button>'+
+    '<button class="btn full ghost" onclick="closeModal()">先不要</button>');
+}
+function wkHandGo(){
+  var c=(typeof cur!=='undefined'&&cur)?cur:null;
+  if(!c)return toast('先打開一個對話');
+  var q=String((document.getElementById('wkHandQ')||{}).value||'').trim();
+  if(!q)return toast('要叫他做什麼，寫一句');
+  if(typeof activeApi==='function'&&!activeApi())return toast('先去「設置」配好 API');
+  closeModal();
+  try{
+    var t=xaStart(c,q,q);
+    go('wechat');
+    if(t)toast('丟給他了，去對話裡看他走步子');
+  }catch(e){toast('起不了單：'+String((e&&e.message)||e))}
+}
+function wkPlan(){
+  modal('<h3>讓他自己排一串</h3>'+
+    '<div style="font-size:11px;color:var(--ink-soft);line-height:1.7;margin-bottom:8px">用一句話講要辦什麼，他會寫成一份可重複跑的工具流存進來（要先在設置配好 API）。</div>'+
+    '<textarea id="wkPlanQ" style="min-height:80px" placeholder="例如：每次我說睡前了，就幫我把抖音鎖 90 分鐘，再把明天的鬧鐘看一下"></textarea>'+
+    '<button class="btn full" onclick="wkPlanGo()">排排看</button>'+
+    '<button class="btn full ghost" onclick="closeModal()">算了</button>');
+}
+async function wkPlanGo(){
+  var q=String((document.getElementById('wkPlanQ')||{}).value||'').trim();
+  if(!q)return toast('先寫一句要辦的事');
+  if(typeof activeApi==='function'&&!activeApi())return toast('先去「設置」配好 API');
+  closeModal();toast('他在想步子…');
+  var sys='你在幫小愛機寫「工作流」JSON，之後由本機照著一步一步跑。'+
+    '能用的動作只有：'+WK_ACTS.join('、')+'。'+
+    '輸出格式：{"name":"串的名字","desc":"一句話說明","vars":[{"k":"who","label":"要帶給誰","def":""}],"steps":[{"a":"open_app","args":{"app":"微信"},"say":"打開微信"}]}。'+
+    '規則：步子 3 到 10 個；最後一步要是 done 或 fail；會讓人付款、發送、刪除的那一步前面先加一個 confirm；需要機主當場填的東西寫成 {{k}} 佔位（用雙大括號）放在 args 裡的字串；只輸出 JSON，前後不要任何說明。';
+  var raw='';
+  try{raw=await sendChat(activeApi(),[{role:'system',content:sys},{role:'user',content:q}],{maxTokens:900,noDigest:true})}catch(e){return toast('排流出錯：'+String((e&&e.message)||e))}
+  var f;
+  try{f=wkNormFlow(raw)}catch(e){return toast('他回的不是能跑的流程（'+String((e&&e.message)||e)+'）')}
+  if(!f.name||f.name==='匯入的流程')f.name=q.slice(0,20);
+  WK.flows.unshift(f);wkSave();wkRender();
+  toast('排好了：'+f.name);
+  try{xaLog&&xaLog('work','讓 AI 排了一串：'+f.name+'（'+f.steps.length+' 步）','')}catch(e){}
+}
+function wkDom(){
+  if(document.getElementById('work'))return true;
+  var scr=document.getElementById('screen');if(!scr)return false;
+  var st=document.createElement('style');st.id='wkCss';st.textContent=wkCss();
+  var pg=document.createElement('div');pg.id='work';pg.className='page';
+  pg.innerHTML='<div class="hd"><div class="bk" onclick="home()"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></div><div class="ti">工作模式</div><div class="rt" onclick="wkPaste()">＋</div></div>'+
+    '<div class="body"><div class="wk-in" id="wkIn"></div></div>';
+  scr.appendChild(st);scr.appendChild(pg);
+  return true;
+}
+function wkRender(){
+  var host=document.getElementById('wkIn');if(!host)return;
+  var h='';
+  h+='<div class="wk-card" style="line-height:1.85"><div class="wk-h4">把工作交給他做</div>'+
+     '<div class="wk-sub">這裡可以吃兩種東西：<b>工具流</b>（一份寫死的步子清單，誰跑都一樣）跟<b>辦事</b>（只給一個目標，他自己想步子）。'+
+     '跑的時候有 APK 橋接就真的動手；只有網頁就退成半自動——他把 APP 叫起來、字幫你複製好，最後那幾下你按。</div></div>';
+  h+='<div class="wk-bar">'+
+     '<button class="btn full" onclick="wkPaste()">貼上工具流 JSON</button>'+
+     '<button class="btn full ghost" onclick="wkFile()">從檔案匯入</button>'+
+     '<button class="btn full ghost" onclick="wkPlan()">讓他自己排一串</button>'+
+     '<button class="btn full ghost" onclick="wkHand()">交給他辦一件事</button></div>';
+  if(WK.run){
+    h+='<div class="wk-card"><div class="wk-h4" id="wkRunHd">…</div>'+
+       '<div class="wk-sub" style="margin-bottom:6px">執行方式：'+esc(WK.run.mode)+'</div>'+
+       '<div class="wk-log" id="wkLog"></div>'+
+       (WK.run.state==='run'?'<button class="btn full ghost" style="margin-top:8px" onclick="wkStop()">叫停</button>':'<button class="btn full ghost" style="margin-top:8px" onclick="wkClearRun()">收起來</button>')+
+       '</div>';
+  }
+  if(WK.flows.length){
+    h+='<div class="wk-h4" style="margin:14px 2px 8px;font-size:12.5px">工具流（'+WK.flows.length+'）</div>';
+    h+=WK.flows.map(function(f,i){
+      return '<div class="wk-card"><div style="display:flex;align-items:baseline;gap:6px"><div class="wk-h4" style="flex:1;min-width:0">'+esc(f.name)+
+        (f.builtin?'<span class="wk-tag">內建</span>':'')+(f.author?'<span class="wk-tag">'+esc(f.author)+'</span>':'')+'</div></div>'+
+        '<div class="wk-sub">'+esc(f.desc||'（沒寫說明）')+'</div>'+
+        '<div class="wk-steps">'+f.steps.slice(0,6).map(function(s,j){return (j+1)+'. <b>'+esc(s.a)+'</b> '+esc(s.say||wkSayOf(s.a,s.args||{}))}).join('<br>')+
+        (f.steps.length>6?'<br>…還有 '+(f.steps.length-6)+' 步':'')+'</div>'+
+        '<div class="row" style="gap:8px;margin-top:10px"><button class="btn full" onclick="wkAskVars('+i+')">跑這串</button>'+
+        '<button class="btn full ghost" onclick="wkExport('+i+')">匯出</button>'+
+        '<button class="btn full ghost" onclick="wkDel('+i+')">刪</button></div></div>';
+    }).join('');
+  }
+  if(WK.runs.length){
+    h+='<div class="wk-h4" style="margin:14px 2px 8px;font-size:12.5px">最近跑過</div><div class="wk-card">'+
+      WK.runs.slice(0,8).map(function(r){return '<div class="wk-sub">'+nkHM(r.at)+'　'+esc(r.name)+'　'+(r.state==='done'?'跑完':r.state==='stop'?'叫停':'停在錯誤')+'（成 '+r.ok+'／敗 '+r.no+'）</div>'}).join('')+'</div>';
+  }
+  host.innerHTML=h;
+  if(WK.run)wkPaintLog();
+}
+function wkClearRun(){WK.run=null;wkRender()}
+function wkEnter(){
+  if(!wkDom())return false;
+  if(!V1219.flowLoaded)try{wkLoad()}catch(e){}
+  V1219.flowLoaded=1;
+  wkRender();
+  return true;
+}
+
+/* ---- 5. 桌面圖標 / 頁面掛載 / 橋接日誌 ---- */
+function wkIcons(){
+  try{
+    if(typeof APP_INFO_MAP!=='undefined'&&APP_INFO_MAP&&!APP_INFO_MAP.work){
+      APP_INFO_MAP.work={name:'工作模式',iconSvg:'<svg viewBox="0 0 24 24"><rect x="3" y="7.4" width="18" height="13" rx="3.2"/><path d="M9 7.4V6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1.4"/><path d="M3 12.6h18"/><path d="M11 15.4h2"/></svg>'};
+    }
+    if(typeof desktopItems!=='undefined'&&Array.isArray(desktopItems)&&!desktopItems.some(function(x){return x&&x.type==='app'&&x.key==='work'})){
+      desktopItems.push({type:'app',key:'work',span:1});
+      try{DB.set('desktopItems',desktopItems)}catch(e){}
+    }
+  }catch(e){}
+}
+function wkWireBridge(){
+  try{
+    if(typeof window==='undefined'||!window.PhoneNative||window.__wkWired)return;
+    var old=window.__xaAct;
+    if(typeof old!=='function'||old.__wkWired)return;
+    var w=function(a,args){
+      var p=null;
+      try{p=old(a,args)}catch(e){throw e}
+      try{
+        if(p&&typeof p.then==='function'){
+          p.then(function(r){try{xaLog&&xaLog('bridge',String(a)+' → '+(r&&r.ok?'成':'未成')+'：'+String((r&&r.why)||'').slice(0,90),'')}catch(e){}}).catch(function(){});
+        }
+      }catch(e){}
+      return p;
+    };
+    w.__wkWired=1;
+    window.__xaAct=w;
+    window.__wkWired=1;
+  }catch(e){}
+  try{
+    var br=window.PhoneNative;
+    if(br&&typeof br.onmessage==='function'&&!br.__wkEvent){
+      var oldMsg=br.onmessage;
+      br.onmessage=function(e){
+        try{
+          var m=JSON.parse(e.data);
+          if(m&&m.event==='accessibility_status'&&m.result){
+            var k=String(!!m.result.enabled)+'/'+String(!!m.result.connected);
+            if(br.__wkState!==k){br.__wkState=k;
+              try{xaLog&&xaLog('bridge','無障礙狀態推送：'+(m.result.connected?'已授權 · 已連接':(m.result.enabled?'系統已授權 · 服務未連接':'未授權')),'')}catch(x){}
+            }
+          }
+        }catch(x){}
+        return oldMsg.apply(this,arguments);
+      };
+      br.__wkEvent=1;
+    }
+  }catch(e){}
+}
+var V1219={flowLoaded:0,icons:0,passes:0};
+function v1219Boot(){
+  try{nkDom()}catch(e){}
+  try{wkDom()}catch(e){}
+  try{v1219Pass()}catch(e){}
+  var iv=setInterval(function(){try{v1219Pass()}catch(e){}V1219.passes++;if(V1219.passes>=40||(V1219.icons&&V1219.flowLoaded&&V1219.passes>=3))clearInterval(iv)},700);
+  setInterval(function(){try{if(lkNative()&&NK.native)lkEvents()}catch(e){}},30000);
+}
+function v1219Pass(){
+  try{if(!V1219.icons&&typeof chars!=='undefined'&&Array.isArray(chars)&&chars.length){wkIcons();V1219.icons=1;
+    if(typeof renderDesktop==='function'&&document.getElementById('home')&&document.getElementById('home').classList.contains('on'))renderDesktop();
+  }}catch(e){}
+  try{nkBoot()}catch(e){}
+  try{if(!V1219.flowLoaded&&typeof chars!=='undefined'&&Array.isArray(chars)&&chars.length){wkLoad();V1219.flowLoaded=1}}catch(e){}
+  try{pmBoot()}catch(e){}
+  try{wkWireBridge()}catch(e){}
+  try{pmEnsureDom()}catch(e){}
+}
+var V1219_GO=null;
+function v1219GoWrap(){
+  if(V1219_GO||typeof go!=='function')return;
+  V1219_GO=go;
+  go=function(id){
+    var r=V1219_GO.apply(this,arguments);
+    try{
+      if(id==='work')wkEnter();
+      if(id==='home'){try{wkIcons()}catch(e2){}}
+      if(id==='settings'){lkSec();lkRender();setTimeout(function(){try{if(typeof window.xaNotifyStatus==='function')window.xaNotifyStatus().then(function(n){if(n&&n.ok&&n.granted===false)lkNotifyHint()})}catch(e){}},300)}
+      nkVis(id);
+      if(id!=='chat')nkClose();
+    }catch(e){}
+    return r;
+  };
+}
+var V1219_DR=null;
+function v1219DrawerWrap(){
+  if(V1219_DR||typeof renderDrawerContent!=='function')return;
+  V1219_DR=renderDrawerContent;
+  renderDrawerContent=function(){
+    var r=V1219_DR.apply(this,arguments);
+    try{pmDrawerRender()}catch(e){}
+    return r;
+  };
+}
+function v1219Hint(){
+  try{
+    if(DB.get('v1219Hint',''))return;
+    DB.set('v1219Hint',String(Date.now()));
+    setTimeout(function(){try{toast('桌面多了「工作模式」；設置裡有「強制應用鎖」；左上角是消息欄')}catch(e){}},1400);
+  }catch(e){}
+}
+try{
+  v1219Boot();v1219GoWrap();v1219DrawerWrap();v1219Hint();
+}catch(e){}
 </script>
 <script>
 /* ===== MiniMax TTS 語音設置 ===== */
@@ -18958,7 +20676,7 @@ function renderSettings(){
 
 /* --- 導出 --- */
 /* iPhone 朋友圈的 i5Lock／i5Pwd／i5Wall 存在角色物件上，跟著 'chars' 一起備份，不必另加鍵 */
-const BACKUP_KEYS=['xaNameV2','apis','chars','wbs','stickers','userProfile','favorites','moments','desktopItems','widgetConfig','customWidgets','customAppIcons','cmpStore','pchIcons','wyStore','aiRules','fsMode','appleMode','ttsConfig','pfChar','pfIdentities','pfActiveId','theme','iconShape','font','wp','deskTextColor','deskPresets','mailPapers','mailLetters','xappData','lang','momentCover','wbStyle','momentSkin','cardSend','wyWall','wyWallDim','benti_cfg','benti_books','benti_act','wyWzStat','wyWzVer','YANJUE_QQSHOW_PERSISTENT_DATA_V11','YANJUE_QQSHOW_CUSTOM_ITEMS_V1','npcReq','npcDone','npcReject','npcDay','pcSelected','pcStore','timeAware','xjcTheaters','xjcRecords','xjcSeeded'];
+const BACKUP_KEYS=['xaNameV2','apis','chars','wbs','stickers','userProfile','favorites','moments','desktopItems','widgetConfig','customWidgets','customAppIcons','cmpStore','pchIcons','wyStore','aiRules','fsMode','appleMode','ttsConfig','pfChar','pfIdentities','pfActiveId','theme','iconShape','font','wp','deskTextColor','deskPresets','mailPapers','mailLetters','xappData','lang','momentCover','wbStyle','momentSkin','cardSend','wyWall','wyWallDim','benti_cfg','benti_books','benti_act','wyWzStat','wyWzVer','YANJUE_QQSHOW_PERSISTENT_DATA_V11','YANJUE_QQSHOW_CUSTOM_ITEMS_V1','npcReq','npcDone','npcReject','npcDay','pcSelected','pcStore','timeAware','xjcTheaters','xjcRecords','xjcSeeded','wkFlows','wkRuns','nkBox','nkUnread','nkMaster','nkNative','proMaster','proTail'];
 function backupObject(){
  const data={};
  BACKUP_KEYS.forEach(k=>{const v=localStorage.getItem(k);if(v!==null){try{data[k]=JSON.parse(v)}catch(e){data[k]=v}}});

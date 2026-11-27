@@ -3,6 +3,7 @@ package com.xiaoai.phone;
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.GestureDescription;
 import android.app.KeyguardManager;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ResolveInfo;
 import android.graphics.Path;
@@ -48,6 +49,9 @@ public final class PhoneService extends AccessibilityService {
         super.onCreate();
         acceptsEvents=true;
         AccessibilityDiagnostics.created(this);
+        // Enforcement announces itself through the tray, so the channels must
+        // exist even when the activity has never been opened.
+        Notifier.ensure(this);
     }
     @Override protected void onServiceConnected(){
         super.onServiceConnected();
@@ -109,7 +113,8 @@ public final class PhoneService extends AccessibilityService {
     JSONObject appLockCommand(JSONObject command){return appLocks==null?result(false,"无障碍服务尚未连接",""):appLocks.command(command);}
     private void clearDraft(){draft="";draftWindow=-1;}
     static final class Target {final String pkg,label;Target(String p,String l){pkg=p;label=l;}}
-    private boolean blockedPackage(String p){return p==null||p.isEmpty()||p.equals(getPackageName())||p.startsWith("com.android.")||p.startsWith("com.google.android.permissioncontroller")||p.contains("bank")||p.contains("alipay")||p.contains("wallet")||p.contains("password")||p.contains("authenticator");}
+    static boolean blockedPackage(Context c,String p){return p==null||p.isEmpty()||p.equals(c.getPackageName())||p.startsWith("com.android.")||p.startsWith("com.google.android.permissioncontroller")||p.contains("bank")||p.contains("alipay")||p.contains("wallet")||p.contains("password")||p.contains("authenticator");}
+    private boolean blockedPackage(String p){return blockedPackage(this,p);}
     Target resolve(String name){
         if(name==null||name.trim().isEmpty())return null;String n=name.trim();
         Map<String,String> aliases=new HashMap<>();aliases.put("微信","com.tencent.mm");aliases.put("wechat","com.tencent.mm");aliases.put("qq","com.tencent.mobileqq");aliases.put("抖音","com.ss.android.ugc.aweme");aliases.put("小紅書","com.xingin.xhs");aliases.put("小红书","com.xingin.xhs");aliases.put("拼多多","com.xunmeng.pinduoduo");aliases.put("b站","tv.danmaku.bili");

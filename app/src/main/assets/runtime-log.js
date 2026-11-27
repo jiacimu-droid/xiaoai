@@ -387,7 +387,13 @@ try{
 }catch(e){}
 
 
-/* Attach to the shared chat/model request and task termination paths. */
+/* Attach to the shared chat/model request and task termination paths.
+   The same program also ships inline in index.html; wrapping a second time
+   would double every counter, so whoever gets here first owns the hooks. */
+if(typeof window!=='undefined'&&window.__xaLogInstalled){
+  // inline copy already attached: nothing to do
+}else{
+if(typeof window!=='undefined')window.__xaLogInstalled=1;
 if(typeof sendChatRaw==='function'){
   var xaOriginalChatCall=sendChatRaw;
   sendChatRaw=async function(){
@@ -413,4 +419,5 @@ if(typeof renderSettings==='function'){
 if(typeof v1215PeekRows==='function'){
   var xaOriginalPeekRows=v1215PeekRows;
   v1215PeekRows=function(){return xaOriginalPeekRows.apply(this,arguments)+v1217PeekRows();};
+}
 }
