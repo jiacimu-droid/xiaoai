@@ -174,8 +174,7 @@ jobs:
           edit('app/build.gradle',[
           ("versionCode = (System.getenv('GITHUB_RUN_NUMBER') ?: '1').toInteger()","versionCode = 1220 + (System.getenv('GITHUB_RUN_NUMBER') ?: '1').toInteger()"),
           ("versionName '1.0-v1219'","versionName '1.0-v1220'")])
-          edit('.github/workflows/apk.yml',[
-          ('test "$version_code" = "$GITHUB_RUN_NUMBER"','test "$version_code" = "$((1220 + GITHUB_RUN_NUMBER))"')])
+
           
           PY
       - name: Verify existing tests and source diff
@@ -189,6 +188,6 @@ jobs:
         run: |
           git config user.name github-actions[bot]
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add app .github/workflows/apk.yml
+          git add app
           git commit -m 'Port v1220 focus input and lock overlay fixes'
           git push origin HEAD:import/v1220
