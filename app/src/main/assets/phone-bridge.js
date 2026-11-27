@@ -277,7 +277,7 @@ g.xaTaskSys=function(t,c){
  const canLock=g.xaPhoneLockIntent(t.q);
  const tools=[
    'open_app {"app":"应用名"}；screenshot {} 读取当前控件；capture_window {} 读取当前应用图片（Android 14+）。',
-   'tap_text {"text":"确切控件名或输入框提示文字"}；focus_input {} 定位并聚焦当前页面的输入框（空输入框没有文字，必须用它）；tap_xy {"x":0.5,"y":0.5}；long_press {"x":0.5,"y":0.5}；back {}。',
+   'tap_text {"text":"控件文字"}；列表/對話行的實際文字是「名字 時間 摘要」，給名字就能點進去（嚴格相等找不到時自動改成唯一前綴/包含）；只允許嚴格相等時加 match:"exact"；含多個相近文字會回失敗而不是亂點；focus_input {} 定位并聚焦当前页面的输入框（空输入框没有文字，必须用它）；tap_xy {"x":0.5,"y":0.5}；long_press {"x":0.5,"y":0.5}；back {}。',
    '要往聊天框打字时先 focus_input {}，拿到「已取得焦點」回执后再 type_text {"text":"内容"}。',
    'swipe {"startX":0.5,"startY":0.8,"endX":0.5,"endY":0.3,"durationMs":400}。坐标用控件树的全屏比例。',
    'type_text {"text":"实际输入内容"}；用户让角色自由拟稿时可用 type_text {"compose":"写作意图"}。',

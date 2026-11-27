@@ -230,6 +230,41 @@ public final class PhoneService extends AccessibilityService {
         List<AccessibilityNodeInfo> matches=r.findAccessibilityNodeInfosByText(s);AccessibilityNodeInfo found=null;
         for(AccessibilityNodeInfo n:matches){if(!n.isVisibleToUser())continue;String t=String.valueOf(n.getText()),d=String.valueOf(n.getContentDescription());if(!s.equals(t)&&!s.equals(d))continue;if(found!=null)return null;found=n;}return found;
     }
+    /** 定位用的文字標籤：微信列表行有時只有 contentDescription。 */
+    private String labelOf(AccessibilityNodeInfo n){
+        if(n==null)return "";
+        String t=n.getText()==null?"":n.getText().toString();
+        if(t.trim().isEmpty())t=n.getContentDescription()==null?"":n.getContentDescription().toString();
+        return t;
+    }
+    private int topOf(AccessibilityNodeInfo n){Rect b=new Rect();n.getBoundsInScreen(b);return b.top;}
+    /**
+     * 嚴格相等找不到時的兜底定位。微信聊天列表那一行的可見文字是
+     * 「名字 + 時間 + 最後一條摘要」，所以 exact() 永遠回 null，
+     * 表現就是機主說的「點進對話點不動」。
+     * 只取目標 App 自己的控件、跳過輸入框與危險字、同文字取最上面那個。
+     */
+    private AccessibilityNodeInfo fuzzyLocate(AccessibilityNodeInfo r,String s,String[] note){
+        List<AccessibilityNodeInfo> all=r.findAccessibilityNodeInfosByText(s);
+        if(all==null||all.isEmpty())return null;
+        LinkedHashMap<String,AccessibilityNodeInfo> keep=new LinkedHashMap<>();
+        for(AccessibilityNodeInfo n:all){
+            if(n==null||!n.isVisibleToUser()||n.isEditable()||n.isPassword())continue;
+            if(!belongsToTarget(n))continue;
+            String t=TapMatch.norm(labelOf(n));
+            if(t.isEmpty()||TapMatch.risky(t))continue;
+            AccessibilityNodeInfo old=keep.get(t);
+            if(old==null||topOf(n)<topOf(old))keep.put(t,n);
+        }
+        if(keep.isEmpty())return null;
+        String[] texts=keep.keySet().toArray(new String[0]);
+        List<AccessibilityNodeInfo> nodes=new ArrayList<>(keep.values());
+        int idx=TapMatch.choose(s,texts);
+        if(idx==TapMatch.AMBIGUOUS){if(note!=null)note[0]="畫面裡有幾個都含「"+s+"」的文字，分不清要點哪個";return null;}
+        if(idx<0){if(note!=null)note[0]="沒有可點擊的控件含「"+s+"」";return null;}
+        if(note!=null)note[0]="按「"+texts[idx]+"」定位";
+        return nodes.get(idx);
+    }
     private boolean editable(AccessibilityNodeInfo n){
         return n!=null&&n.isVisibleToUser()&&n.isEnabled()&&n.isEditable()&&!n.isPassword()&&belongsToTarget(n);
     }
@@ -381,6 +416,16 @@ public final class PhoneService extends AccessibilityService {
                             focusInput(g,r,t,cb,f->finish(g,cb,true,"已取得焦點"));return;
                         }
                     }
+                    String[] note=new String[1];
+                    if(node==null&&!a.optString("match").equals("exact")){
+                        node=fuzzyLocate(r,t,note);
+                        if(node!=null){why="已用模糊定位（"+note[0]+"），僅為動作回執";}
+                        else {
+                            busy=false;
+                            cb.accept(result(false,"找不到「"+t+"」這個控件："+(note[0]==null?"畫面裡沒有相近的文字":note[0])+"。先 screenshot 重新觀察，或改用 tap_xy",observe(r)));
+                            return;
+                        }
+                    }
                     ok=click(node);
                     if(!ok&&node!=null){
                         Rect b=new Rect();node.getBoundsInScreen(b);Rect window=new Rect();r.getBoundsInScreen(window);
@@ -415,6 +460,6 @@ public final class PhoneService extends AccessibilityService {
                 default:throw new IllegalArgumentException("未知動作");
             }
         }catch(Exception e){busy=false;cb.accept(result(false,String.valueOf(e.getMessage()),""));return;}
-        final boolean accepted=ok;h.postDelayed(()->finish(g,cb,accepted,accepted?why:"Android 未接受動作"),350);
+        final boolean accepted=ok;final String whyDone=why;h.postDelayed(()->finish(g,cb,accepted,accepted?whyDone:"Android 未接受動作"),350);
     }
 }
