@@ -8,6 +8,16 @@
 var XAL={list:null,last:{},timer:0,f:'all',fold:{},shown:0,stat:null,frames:0};
 var XA_LOG_CAP=400,XA_LOG_KEEP=220,XA_LOG_SHOWN=140;
 
+/* v1221：報告頭與開機行的版本由首頁膠囊讀，不要再寫死。
+   之前這裡硬寫 v1217，害匯出的報告一直報舊版本，
+   看不出手機上跑的到底是哪一份，排查全被帶偏。 */
+function xaVerNow(){
+  try{
+    var v=((document.getElementById('verPill')||{}).textContent||'').trim().split(/\s|[·]/)[0];
+    return /^v\d{3,}$/.test(v)?v:'當前版本';
+  }catch(e){return '當前版本'}
+}
+
 function xaLogLoad(){
   if(XAL.list)return XAL.list;
   var a=[];
@@ -105,7 +115,7 @@ function xaLogBoot(){
     window.__xaLogBuf=[];
     window.__xaLogSink=function(t,k,m,d){return xaLogSink(t,k,m,d)};
     var n=buf.length;
-    xaLog('boot','開機完成 · v1217'+(n?('（載入階段先收到 '+n+' 條）'):''),
+    xaLog('boot','開機完成 · '+xaVerNow()+'（Android 注入端）'+(n?('（載入階段先收到 '+n+' 條）'):''),
       (navigator.userAgent||'')+'\n螢幕 '+window.innerWidth+'×'+window.innerHeight+' · dpr '+(window.devicePixelRatio||1));
     xaLogFlush();
     document.querySelectorAll('iframe').forEach(function(frame){xaLogFrame(frame.contentWindow)});
@@ -231,7 +241,7 @@ function xaLogText(){
   var L=[],push=function(s){L.push(s)};
   try{
     var st=xaLogStatLoad();
-    push('小愛機 運行報告（v1217）');
+    push('小愛機 運行報告（'+xaVerNow()+'）');
     push('產生時間：'+new Date().toLocaleString());
     push('開機次數：累計 '+st.boots+' 次 · 本份記錄 '+xaLogLoad().length+' 條');
     push('AI 呼叫：成功 '+st.api+' 次／失敗 '+st.apiErr+' 次');

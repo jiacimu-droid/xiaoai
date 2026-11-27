@@ -4242,7 +4242,7 @@ body.kb-x #xapp .x-scroll{max-height:none}
 
 <!-- HOME 桌面 (包含 桌面組件、App 圖標，支援長按進入編輯抖動與全新流暢觸控拖拽) -->
 <div id="home" class="page on">
-  <div id="verPill">v1220 · 輸入框會自己聚焦</div>
+  <div id="verPill">v1221 · 對話列會自己補點</div>
   <div id="homeEditBar">
     <span>桌面編輯中… 拖拽換位 · 點一下可用方向盤</span>
     <button class="btn sm" onclick="exitHomeEditMode()">完成</button>
@@ -11567,6 +11567,75 @@ function refreshWechatLists(){
   if(activeTagFilter&&activeTagFilter!=='全部'&&!charsTags.has(activeTagFilter))activeTagFilter='全部';
 }
 
+/* ===== v1221 對話列點擊兜底 =====
+   有實測到「點好友列完全沒反應、運行日誌裡也沒有任何報錯」的手機（華為 WebView 114）：
+   這種情形只可能是 click 根本沒送到列上——要嘛是列上的 onclick 在合併時掉了，
+   要嘛是那顆 WebView 自己把這次觸控吞了。這裡留兩條後路，正常流程一律不碰：
+   1) click 有進來、但列上找不到 onclick → 由位置或名字推回索引，直接開；
+   2) 手指起落到 0.42 秒之內沒有任何 click → 當作被吞掉的點擊，補開一次。
+   兩條都只認微信列表的 .it 與通訊錄的 .contact-item；滑動、長拖不會觸發。 */
+(function(){
+  var lastClick=0,tstart=null;
+  function rowOf(t){try{return(t&&t.closest)?t.closest('#charList .it,#contactsUserList .contact-item'):null}catch(e){return null}}
+  function nameOf(el){
+    try{
+      var n=el.querySelector('.nm');if(!n)return'';
+      var g=n.cloneNode(true);
+      var bad=g.querySelectorAll?g.querySelectorAll('.tag'):[];
+      for(var i=0;i<bad.length;i++)bad[i].parentNode.removeChild(bad[i]);
+      return String(g.textContent||'').replace(/\s+/g,' ').trim();
+    }catch(e){return''}
+  }
+  function idxOf(el){
+    var m=/openChat\(\s*(\d+)\s*\)/.exec(String(el.getAttribute('onclick')||''));
+    if(m)return Number(m[1]);
+    try{
+      var p=el.parentNode;
+      if(p&&p.id==='charList'){var k=[].slice.call(p.children).indexOf(el);if(k>=0&&k<chars.length)return k}
+    }catch(e){}
+    var nm=nameOf(el);
+    if(nm){for(var i=0;i<chars.length;i++){
+      var c=chars[i]||{};
+      var t=String(c.remark||c.name||'').trim();
+      if(t&&nm===t)return i;
+    }}
+    return -1;
+  }
+  function note(k,d){try{if(typeof xaLog==='function')xaLog('tap',k,d)}catch(e){}}
+  document.addEventListener('click',function(e){
+    var el=rowOf(e.target);if(!el)return;
+    lastClick=Date.now();
+    if(el.getAttribute('onclick'))return;
+    var i=idxOf(el);if(i<0)return;
+    note('列上沒有 onclick，改用兜底開啟','idx='+i);
+    openChat(i);
+  },true);
+  document.addEventListener('touchstart',function(e){
+    var el=rowOf(e.target);var p=e.touches&&e.touches[0];
+    if(!el||!p){tstart=null;return}
+    tstart={i:idxOf(el),x:p.clientX,y:p.clientY,t:Date.now()};
+  },{passive:true});
+  document.addEventListener('touchmove',function(e){
+    if(!tstart)return;
+    var p=e.touches&&e.touches[0];if(!p){tstart=null;return}
+    if(Math.abs(p.clientX-tstart.x)>16||Math.abs(p.clientY-tstart.y)>16)tstart=null;
+  },{passive:true});
+  document.addEventListener('touchcancel',function(){tstart=null},{passive:true});
+  document.addEventListener('touchend',function(e){
+    var s=tstart;tstart=null;
+    if(!s||s.i<0)return;
+    var p=e.changedTouches&&e.changedTouches[0];if(!p)return;
+    if(Date.now()-s.t>800)return;
+    if(Math.abs(p.clientX-s.x)>16||Math.abs(p.clientY-s.y)>16)return;
+    var mark=lastClick;
+    setTimeout(function(){
+      if(lastClick!==mark)return;
+      note('WebView 沒送 click，補一次開啟','idx='+s.i);
+      openChat(s.i);
+    },420);
+  },{passive:true});
+})();
+
 function openTagsFilterModal(){
   const tags=new Set();
   chars.forEach(c=>(c.tags||[]).forEach(t=>tags.add(t)));
@@ -12161,16 +12230,30 @@ function uploadMomentCover(inp){
 
 // ===== CHAT WINDOW =====
 function openChat(i){
-cur=chars[i];
-cur.unread=0;save();try{renderChars();renderContacts();}catch(e){}
-if(!cur.bubbleTheme)cur.bubbleTheme='imessage';
-if(cur.showReadStatus===undefined)cur.showReadStatus=true;
-if(cur.timeDisplay===undefined)cur.timeDisplay='center';
-cancelQuote();
-updateChatHeader();
-applyChatStyle();
+/* v1221：以前這裡任何一步炸掉（元件缺了、資料髒了、字串對不上），
+   整個函式就在 go('chat') 之前中止，畫面上看起來就是「點了好友沒反應」，
+   而且日誌裡連錯誤都不一定看得到。現在先確認人存在、先切頁，
+   裝飾的幾步各自包起來，壞一步也不會把整扇門鎖死。 */
+var idx=(typeof i==='number')?i:Number(i);
+if(!isFinite(idx)||idx<0||idx>=chars.length){
+  try{if(typeof xaLog==='function')xaLog('tap','點好友列找不到人','i='+String(i))}catch(e){}
+  try{refreshWechatLists()}catch(e){}
+  return toast('找不到這位好友了，列表已重新整理');
+}
+var c=chars[idx];
+cur=c;
+try{c.unread=0}catch(e){}
+try{save()}catch(e){}
+try{renderChars();renderContacts()}catch(e){}
+if(!c.bubbleTheme)c.bubbleTheme='imessage';
+if(c.showReadStatus===undefined)c.showReadStatus=true;
+if(c.timeDisplay===undefined)c.timeDisplay='center';
 go('chat');
-renderMsgs();
+try{cancelQuote()}catch(e){}
+try{updateChatHeader()}catch(e){}
+try{applyChatStyle()}catch(e){}
+try{renderMsgs()}catch(e){}
+try{if(typeof xaLog==='function')xaLog('tap','已打開對話：'+String(c.remark||c.name||''),'idx='+idx)}catch(e){}
 }
 
 function updateChatHeader(){
