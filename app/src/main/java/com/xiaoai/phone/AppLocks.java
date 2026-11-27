@@ -346,7 +346,13 @@ final class AppLocks {
         TextView view = line("应用已锁定", 16, color("ink", 0xFF302A27), true);
         view.setGravity(Gravity.CENTER);
         view.setBackgroundColor(color("surface", 0xFFF8F5F1) | 0xFF000000);
-        view.setOnTouchListener((ignored, event) -> true);
+        view.setText("应用已锁定 · 点击返回桌面");
+        view.setOnClickListener(ignored -> {
+            if (!usable()) return;
+            boolean accepted=service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME);
+            AccessibilityDiagnostics.lockStage(service,accepted?"Android 接受回主屏請求":"Android 拒絕回主屏請求");
+            if (accepted) removeCover();
+        });
         WindowManager.LayoutParams params = new WindowManager.LayoutParams(
                 WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,

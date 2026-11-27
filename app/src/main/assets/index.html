@@ -4242,7 +4242,7 @@ body.kb-x #xapp .x-scroll{max-height:none}
 
 <!-- HOME 桌面 (包含 桌面組件、App 圖標，支援長按進入編輯抖動與全新流暢觸控拖拽) -->
 <div id="home" class="page on">
-  <div id="verPill">v1219 · 工作模式、強制鎖、消息欄</div>
+  <div id="verPill">v1220 · 輸入框會自己聚焦</div>
   <div id="homeEditBar">
     <span>桌面編輯中… 拖拽換位 · 點一下可用方向盤</span>
     <button class="btn sm" onclick="exitHomeEditMode()">完成</button>
@@ -4709,7 +4709,7 @@ body.kb-x #xapp .x-scroll{max-height:none}
 <div id="settings" class="page">
   <div class="hd"><div class="bk" onclick="home()"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></div><div class="ti">設置</div><div class="rt" onclick="newApi()">+</div></div>
   <div class="body">
-    <div id="appVersionTag" style="text-align:center;font-size:10px;color:var(--ink-soft);padding:10px 0 4px;letter-spacing:.5px">版本 2026-11-27 · 17組件 v1219</div>
+    <div id="appVersionTag" style="text-align:center;font-size:10px;color:var(--ink-soft);padding:10px 0 4px;letter-spacing:.5px">版本 2026-11-27 · 17組件 v1220</div>
 
     <div class="set-sec-title">介面語言</div>
     <div class="sec">
@@ -17643,7 +17643,7 @@ function v1214PeekRows() {
    有原生橋接（window.__xaAct）就自己走；沒有就降成半自動：叫起 APP、把字複製好，剩下機主手動。 */
 
 var XA_STEP_DEFAULT=8, XA_STEP_HARD=20, XA_STEP_MIN=3;
-var XA_ACTS=['open_app','tap_text','tap_xy','type_text','send_key','screenshot','back','swipe','long_press'];
+var XA_ACTS=['open_app','focus_input','tap_text','tap_xy','type_text','send_key','screenshot','back','swipe','long_press'];
 var XA_CTL=['done','fail','confirm','ask'];
 var XA_LIVE={};
 var XA_APPS={
@@ -17758,6 +17758,7 @@ function xaParseStep(raw){
   if(a==='open'||a==='openapp')a='open_app';
   if(a==='tap'||a==='click'||a==='click_text')a=(args.x!==undefined||args.xy)?'tap_xy':'tap_text';
   if(a==='type'||a==='input'||a==='write')a='type_text';
+  if(['focus','tap_input','click_input','input_box','open_input'].indexOf(a)>=0)a='focus_input';
   if(a==='enter'||a==='send')a='send_key';
   if(a==='screen'||a==='shot'||a==='observe')a='screenshot';
   if(a==='question'||a==='ask_user')a='ask';
@@ -19220,9 +19221,9 @@ function lkRender(){try{if(lkSec())lkStatus()}catch(e){}}
 
 /* ---- 4. 工作模式（匯入工具流 / 插件、讓角色照著跑） ---- */
 var WK={flows:[],runs:[],run:null,pend:null,tab:'flow',busy:false};
-var WK_ACTS=['open_app','tap_text','tap_xy','type_text','send_key','screenshot','back','swipe','long_press','capture_window','send_message','publish_moments','app_locks','lock_app','unlock_app','clear_app_locks','ask','confirm','note','wait','done','fail'];
-var WK_ALIAS={open:'open_app',launch:'open_app',start:'open_app',app:'open_app',click:'tap_text',tap:'tap_text',press:'tap_text',press_text:'tap_text',input:'type_text',type:'type_text',write:'type_text',say_text:'type_text',shot:'screenshot',screen:'screenshot',capture:'capture_window',home:'back',exit:'back',send:'send_key',enter:'send_key',key:'send_key',longpress:'long_press',hold:'long_press',sleep:'wait',pause:'wait',msg:'note',note:'note',text:'note',log:'note',finish:'done',stop:'done',end:'done',lock:'lock_app',block:'lock_app',unlock:'unlock_app',fail_step:'fail'};
-var WK_KEYS=['text','app','name','package','x','y','startX','startY','endX','endY','durationMs','recipient','label','minutes','reason','q','what','detail','result','why','compose','ms','key'];
+var WK_ACTS=['open_app','focus_input','tap_text','tap_xy','type_text','send_key','screenshot','back','swipe','long_press','capture_window','send_message','publish_moments','app_locks','lock_app','unlock_app','clear_app_locks','ask','confirm','note','wait','done','fail'];
+var WK_ALIAS={open:'open_app',focus:'focus_input',focus_input:'focus_input',input_box:'focus_input',tap_input:'focus_input',click_input:'focus_input',open_input:'focus_input',launch:'open_app',start:'open_app',app:'open_app',click:'tap_text',tap:'tap_text',press:'tap_text',press_text:'tap_text',input:'type_text',type:'type_text',write:'type_text',say_text:'type_text',shot:'screenshot',screen:'screenshot',capture:'capture_window',home:'back',exit:'back',send:'send_key',enter:'send_key',key:'send_key',longpress:'long_press',hold:'long_press',sleep:'wait',pause:'wait',msg:'note',note:'note',text:'note',log:'note',finish:'done',stop:'done',end:'done',lock:'lock_app',block:'lock_app',unlock:'unlock_app',fail_step:'fail'};
+var WK_KEYS=['text','app','box','name','package','x','y','startX','startY','endX','endY','durationMs','recipient','label','minutes','reason','q','what','detail','result','why','compose','ms','key'];
 function wkCss(){return [
 '#work .wk-in{padding:2px 0 20px}',
 '#work .wk-card{background:var(--card,#fff);border:1px solid var(--line);border-radius:14px;padding:11px 12px;margin-bottom:10px;box-shadow:0 2px 8px rgba(0,0,0,.04)}',
@@ -19575,8 +19576,18 @@ function wkExecReal(a,args,res){
     var p=null;
     try{p=br(a,args)}catch(e){res({ok:false,why:'橋接異常：'+String((e&&e.message)||e)});return}
     if(!p||typeof p.then!=='function'){res({ok:false,why:'橋接沒回話'});return}
-    p.then(function(r){res({ok:!!(r&&r.ok),why:String((r&&r.why)||'')+(r&&r.screen?('｜'+String(r.screen).slice(0,70)+'…'):'')})})
-     .catch(function(e){res({ok:false,why:'橋接回報異常：'+String((e&&e.message)||e)})});
+    function report(r){res({ok:!!(r&&r.ok),why:String((r&&r.why)||'')+(r&&r.screen?('｜'+String(r.screen).slice(0,70)+'…'):'')})}
+    p.then(function(r){
+      var m=String((r&&r.why)||'');
+      var focusError=/焦點|焦点|聚焦|输入框|輸入框/.test(m);
+      var hint=String((args&&args.text)||'').trim();
+      var tapInput=a==='tap_text'&&/^(輸入框|输入框|對話框|对话框|聊天框|搜索框|搜尋框|輸入|输入|说点什么|說點什麼)$/.test(hint);
+      if(!r||r.ok===true||r.uncertain||!focusError||!(a==='type_text'||tapInput)){report(r);return;}
+      return br('focus_input',tapInput?{box:hint}:{}).then(function(f){
+        if(!f||f.ok!==true||tapInput){report(f);return;}
+        return br('type_text',args).then(report);
+      });
+    }).catch(function(e){res({ok:false,why:'橋接回報異常：'+String((e&&e.message)||e)})});
     return;
   }
   /* 沒橋接＝半自動：真的把 APP 叫起來、真的把字複製好，剩下那幾下機主自己按 */

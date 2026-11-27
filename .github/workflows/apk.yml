@@ -108,7 +108,7 @@ jobs:
           version_code="$("$analyzer" manifest version-code "$apk")"
           echo "Package: $package_id; versionCode: $version_code"
           test "$package_id" = com.xiaoai.phone
-          test "$version_code" = "$GITHUB_RUN_NUMBER"
+          test "$version_code" = "$((1220 + GITHUB_RUN_NUMBER))"
           echo "Fixed package ID, fixed signer and increasing versionCode verified." >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
