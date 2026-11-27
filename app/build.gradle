@@ -1,24 +1,5 @@
 plugins { id 'com.android.application' }
 
-def webAssets = layout.buildDirectory.dir('generated/xiaoaiWebAssets')
-def prepareWebAssets = tasks.register('prepareWebAssets', Sync) {
-    filteringCharset = 'UTF-8'
-    from('src/main/assets') { exclude 'index.html' }
-    from('src/main/assets/index.html') {
-        filter { String line ->
-            switch (line.trim()) {
-                case '<meta charset="UTF-8">':
-                    return line + '\n<script src="runtime-log-early.js"></script>'
-                case '<script src="phone-bridge.js"></script>':
-                    return line + '\n<script src="runtime-log.js"></script>'
-                default:
-                    return line
-            }
-        }
-    }
-    into(webAssets)
-}
-
 android {
     namespace 'com.xiaoai.phone'
     compileSdk 35
@@ -37,12 +18,6 @@ android {
             keyAlias 'xiaoai-debug'
             keyPassword 'xiaoai-debug-only'
         }
-    }
-}
-android.sourceSets.main.assets.setSrcDirs([webAssets.get().asFile])
-tasks.configureEach {
-    if (name == 'preBuild' || (name.startsWith('merge') && name.endsWith('Assets'))) {
-        dependsOn(prepareWebAssets)
     }
 }
 dependencies { implementation 'androidx.webkit:webkit:1.12.1' }

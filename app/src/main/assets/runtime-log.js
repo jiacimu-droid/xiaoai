@@ -5,6 +5,11 @@
    設定頁按「打開運行日誌」就是一份看得見的報告。
    最早的錯誤（載入階段的）由檔頭那段 shim 先收著，這邊再撈回來。
    ============================================================ */
+(function () {
+'use strict';
+if (window.__xaLogInstalled || typeof DB === 'undefined') return;
+window.__xaLogInstalled = true;
+
 var XAL={list:null,last:{},timer:0,f:'all',fold:{},shown:0,stat:null,frames:0};
 var XA_LOG_CAP=400,XA_LOG_KEEP=220,XA_LOG_SHOWN=140;
 
@@ -363,71 +368,42 @@ function xaLogCss(){
     document.head.appendChild(s);
   }catch(e){}
 }
-xaLogCss();
-try{
-  xaLogBoot();
-  /* 存檔失敗也要記一筆：把 DB.set 包一層，只多記一筆，不改它的行為 */
-  try{
-    var _ovf0=(typeof IDBX!=='undefined'&&IDBX.overflow)?IDBX.overflow:null;
-    if(_ovf0&&!IDBX.__xaLogOvf){
-      IDBX.__xaLogOvf=1;
-      IDBX.overflow=function(k,v){
-        try{xaLogStatLoad().ovf=(XAL.stat.ovf||0)+1}catch(e){}
-        var r;
-        try{r=_ovf0.apply(this,arguments)}catch(e){xaLog('store','超大資料改放 IndexedDB 直接炸（'+String(k)+'）：'+window.xaLogError(e),'');throw e}
-        try{if(r&&typeof r.catch==='function')r.catch(function(e){xaLog('store','超大資料改放 IndexedDB 沒成功（'+String(k)+'）：'+window.xaLogError(e),'')})}catch(e){}
-        return r;
-      };
+// Keep the original storage methods private to this installation.
+if (typeof IDBX !== 'undefined') {
+  const overflow = IDBX.overflow;
+  IDBX.overflow = function (key) {
+    xaLogStatLoad().ovf++;
+    let result;
+    try {
+      result = overflow.apply(this, arguments);
+    } catch (error) {
+      xaLog('store', '超大資料改放 IndexedDB 直接炸（'+String(key)+'）：'+window.xaLogError(error), '');
+      throw error;
     }
-    var _xalOldSet=DB.set;
-    if(typeof _xalOldSet==='function'&&!DB.__xaLogWrapped){
-      DB.__xaLogWrapped=1;
-      DB.set=function(k,v){
-        var ok=_xalOldSet.apply(this,arguments);
-        try{
-          if(!ok&&k!=='xaLog'&&k!=='xaLogStat'){
-            var now=Date.now();
-            if(!XAL.storeAt||now-XAL.storeAt>15000){XAL.storeAt=now;xaLog('store','有一個東西存不進去（'+String(k)+'），重新整理就會不見','')}
-          }
-        }catch(e){}
-        return ok;
-      };
-    }
-  }catch(e){}
-}catch(e){}
-
-
-/* Attach to the shared chat/model request and task termination paths.
-   The same program also ships inline in index.html; wrapping a second time
-   would double every counter, so whoever gets here first owns the hooks. */
-if(typeof window!=='undefined'&&window.__xaLogInstalled){
-  // inline copy already attached: nothing to do
-}else{
-if(typeof window!=='undefined')window.__xaLogInstalled=1;
-if(typeof sendChatRaw==='function'){
-  var xaOriginalChatCall=sendChatRaw;
-  sendChatRaw=async function(){
-    try{var result=await xaOriginalChatCall.apply(this,arguments);xaLogApiOK();return result;}
-    catch(e){xaLogApiErr(e);throw e;}
-  };
-}
-if(typeof xaEnd==='function'){
-  var xaOriginalEndTask=xaEnd;
-  xaEnd=function(task,state){
-    var previous=task&&task.state;
-    var result=xaOriginalEndTask.apply(this,arguments);
-    if(task&&task.state!==previous)xaLogXa(state,task);
+    result.catch(error => {
+      xaLog('store', '超大資料改放 IndexedDB 沒成功（'+String(key)+'）：'+window.xaLogError(error), '');
+    });
     return result;
   };
 }
-if(typeof renderSettings==='function'){
-  var xaOriginalSettings=renderSettings;
-  renderSettings=function(){
-    var result=xaOriginalSettings.apply(this,arguments);xaLogStat();return result;
-  };
-}
-if(typeof v1215PeekRows==='function'){
-  var xaOriginalPeekRows=v1215PeekRows;
-  v1215PeekRows=function(){return xaOriginalPeekRows.apply(this,arguments)+v1217PeekRows();};
-}
-}
+const set = DB.set;
+DB.set = function (key) {
+  const saved = set.apply(this, arguments);
+  if (!saved && key !== 'xaLog' && key !== 'xaLogStat') {
+    const now = Date.now();
+    if (!XAL.storeAt || now - XAL.storeAt > 15000) {
+      XAL.storeAt = now;
+      xaLog('store', '有一個東西存不進去（'+String(key)+'），重新整理就會不見', '');
+    }
+  }
+  return saved;
+};
+
+Object.assign(window, {
+  xaLog, xaLogApiOK, xaLogApiErr, xaLogXa, xaLogStat, xaLogOpen,
+  xaFullLogText, xaLogCopy, xaLogExport, xaLogClear, xaLogFold,
+  xaLogSetFilter, v1217PeekRows
+});
+xaLogCss();
+xaLogBoot();
+})();
