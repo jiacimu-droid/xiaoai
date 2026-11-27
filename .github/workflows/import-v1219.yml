@@ -1,0 +1,37 @@
+name: Import reviewed v1219 archive
+on:
+  push:
+    branches: [import/v1219]
+    paths: [import-v1219.zip]
+permissions:
+  contents: write
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify and extract reviewed source
+        run: |
+          python3 - <<'PY'
+          import hashlib, pathlib, zipfile
+          archive = pathlib.Path('import-v1219.zip')
+          assert hashlib.sha256(archive.read_bytes()).hexdigest() == '827ad87dce147aa43a0dcb5b826b0f97bd3204adf595691ea03ec3d8545b4e36'
+          expected = {'app/build.gradle','app/src/main/AndroidManifest.xml','app/src/main/assets/index.html','app/src/main/assets/phone-bridge.js','app/src/main/assets/runtime-log.js','app/src/main/java/com/xiaoai/phone/AppLocks.java','app/src/main/java/com/xiaoai/phone/MainActivity.java','app/src/main/java/com/xiaoai/phone/Notifier.java','app/src/main/java/com/xiaoai/phone/PhoneService.java'}
+          with zipfile.ZipFile(archive) as z:
+              assert set(z.namelist()) == expected and len(z.namelist()) == len(expected)
+              assert z.testzip() is None
+              for name in sorted(expected):
+                  p = pathlib.Path(name)
+                  p.parent.mkdir(parents=True, exist_ok=True)
+                  p.write_bytes(z.read(name))
+          archive.unlink()
+          PY
+          node --check app/src/main/assets/phone-bridge.js
+          node --test tests/*.test.cjs
+      - name: Commit verified source changes
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app import-v1219.zip
+          git commit -m 'Import verified XiaoAi v1219 Android source'
+          git push origin HEAD:import/v1219
