@@ -80,6 +80,13 @@ g.xaNativeToggle=async function(){
  }finally{toggling=false;}
 };
 g.xaNativeCancel=function(){return rpc('cancel');};
+/* Read-only helpers for the v1219 pages: app picker, enforcement history, tray. */
+g.xaAppList=(filter,limit)=>rpc('list_launchable_apps',{filter:String(filter||'').slice(0,24),limit:Number(limit)||80});
+g.xaAppLockEvents=()=>rpc('app_lock_events');
+g.xaNotifyStatus=()=>rpc('notify_status');
+g.xaNotifyPost=(title,body,kind)=>rpc('notify_post',{title:String(title||'').slice(0,80),body:String(body||'').slice(0,400),kind:String(kind||'chat')});
+g.xaNotifyAsk=()=>rpc('notify_permission');
+g.xaNotifyClear=()=>rpc('notify_clear');
 function lockSettings(){
  const row=document.getElementById('xaNativeRow');
  if(!row||typeof document.createElement!=='function')return;

@@ -33,6 +33,9 @@ import java.util.Locale;
 final class AppLocks {
     private static final String PREFS = "app_locks";
     private static final String RULES = "rules";
+    private static final String EVENTS = "events";
+    private static final int EVENT_CAP = 40;
+    private static final long BLOCK_NOTICE_MS = 60_000L;
     private static final long FOREGROUND_CHECK_MS = 180;
     private final PhoneService service;
     private final SharedPreferences prefs;
@@ -40,6 +43,9 @@ final class AppLocks {
     private final AppLockAttempt attempt = new AppLockAttempt();
     private JSONObject rules;
     private long latestExpiry;
+    private long expiryNotified;
+    private String blockNoticedPkg = "";
+    private long blockNoticedAt;
     private LinearLayout notice;
     private View cover;
     private final Runnable hideNotice = this::hide;
@@ -64,21 +70,58 @@ final class AppLocks {
         edit.apply();
     }
 
-    private boolean protectedApp(String pkg) {
+    private boolean protectedApp(String pkg) { return guarded(service, pkg); }
+
+    /** System surfaces, launchers, dialers and this app itself must never be locked. */
+    static boolean guarded(Context c, String pkg) {
         String normalized = pkg.toLowerCase(Locale.ROOT);
-        if (pkg.equals(service.getPackageName()) || normalized.equals("android") ||
+        if (pkg.equals(c.getPackageName()) || normalized.equals("android") ||
             normalized.startsWith("com.android.") || normalized.contains("settings") ||
             normalized.contains("permissioncontroller") || normalized.contains("launcher") ||
             normalized.contains("systemui") || normalized.contains("securitycenter") ||
             normalized.contains("dialer") || normalized.contains("emergency")) return true;
         Intent home = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME);
         for (android.content.pm.ResolveInfo candidate :
-                service.getPackageManager().queryIntentActivities(home, 0)) {
+                c.getPackageManager().queryIntentActivities(home, 0)) {
             if (pkg.equals(candidate.activityInfo.packageName)) return true;
         }
-        TelecomManager telecom = service.getSystemService(TelecomManager.class);
+        TelecomManager telecom = c.getSystemService(TelecomManager.class);
         return (telecom != null && pkg.equals(telecom.getDefaultDialerPackage())) ||
-                pkg.equals(Telephony.Sms.getDefaultSmsPackage(service));
+                pkg.equals(Telephony.Sms.getDefaultSmsPackage(c));
+    }
+
+    /** Whether the picker may offer this package for locking at all. */
+    static boolean lockable(Context c, String pkg) {
+        return !guarded(c, pkg) && !PhoneService.blockedPackage(c, pkg);
+    }
+
+    /** Recent enforcement history, newest last, capped. Readable without the service. */
+    static JSONArray events(Context c) {
+        try { return new JSONArray(c.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(EVENTS, "[]")); }
+        catch (Exception badData) { return new JSONArray(); }
+    }
+
+    private void record(String kind, String pkg, String label) {
+        try {
+            String shown = label == null || label.isEmpty() ? pkg : (label.length() > 24 ? label.substring(0, 24) + "…" : label);
+            long now = System.currentTimeMillis();
+            boolean block = "block".equals(kind);
+            // The watchdog re-fires every 180ms while the app is on screen:
+            // keep one history entry and one tray line per app per minute.
+            if (block && shown.equals(blockNoticedPkg) && now - blockNoticedAt < BLOCK_NOTICE_MS) return;
+            JSONArray arr = events(service);
+            arr.put(PhoneService.json("t", now, "kind", kind, "pkg", pkg, "label", shown));
+            while (arr.length() > EVENT_CAP) arr.remove(0);
+            prefs.edit().putString(EVENTS, arr.toString()).apply();
+            if (block) {
+                blockNoticedPkg = shown; blockNoticedAt = now;
+                Notifier.post(service, Notifier.CHANNEL_GUARD, "應用鎖擋下了", shown + " 想進去，已經切回小愛機");
+            } else if ("expire".equals(kind)) {
+                Notifier.post(service, Notifier.CHANNEL_GUARD, "應用鎖時間到", shown + " 現在可以打開了");
+            }
+        } catch (RuntimeException | LinkageError bad) {
+            AccessibilityDiagnostics.fault(service, "記錄應用鎖事件", bad);
+        }
     }
 
     boolean blocked(String pkg) {
@@ -171,6 +214,12 @@ final class AppLocks {
         handler.removeCallbacks(watchdog);
         long remaining = latestExpiry - System.currentTimeMillis();
         if (remaining <= 0 || PhoneService.instance != service) {
+            if (remaining <= 0 && latestExpiry > 0 && expiryNotified != latestExpiry) {
+                expiryNotified = latestExpiry;
+                String[] gone = expiredRule();
+                blockNoticedPkg = "";
+                if (gone != null) record("expire", gone[0], gone[1]);
+            }
             resetVisit();
             hide();
             return;
@@ -202,6 +251,10 @@ final class AppLocks {
             boolean accepted = service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK);
             AccessibilityDiagnostics.lockStage(service,accepted?"Android 接受返回請求":"Android 拒絕返回請求");
             show(rules.optJSONObject(current.pkg));
+            if (accepted) {
+                JSONObject rule = rules.optJSONObject(current.pkg);
+                record("block", current.pkg, rule == null ? null : rule.optString("app"));
+            }
             if (!accepted) {
                 attempt.backRejected(now);
                 handler.removeCallbacks(watchdog);
@@ -242,6 +295,17 @@ final class AppLocks {
         final int windowId;
 
         Foreground(String pkg, int windowId) { this.pkg = pkg; this.windowId = windowId; }
+    }
+
+    /** [pkg, label] of the rule that just ran out, newest expiry wins. */
+    private String[] expiredRule() {
+        for (java.util.Iterator<String> keys = rules.keys(); keys.hasNext();) {
+            String pkg = keys.next();
+            JSONObject rule = rules.optJSONObject(pkg);
+            if (rule != null && rule.optLong("until") == latestExpiry)
+                return new String[]{pkg, rule.optString("app")};
+        }
+        return null;
     }
 
     private Foreground foreground() {
