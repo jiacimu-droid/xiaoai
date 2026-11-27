@@ -19,7 +19,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD^)" = "ccc011db7f18e9d8f28123202bcfef6215f12951"
+          test "$(git rev-parse HEAD^)" = "27f4b49869c88e2e66397b640b52f13f8f253c06"
+          test "$(git rev-parse HEAD^^)" = "ccc011db7f18e9d8f28123202bcfef6215f12951"
           git fetch origin main
           test "$(git rev-parse origin/main)" = "$(git rev-parse HEAD)"
           cat > /tmp/v1221.patch <<'XIAOAI_PATCH'
