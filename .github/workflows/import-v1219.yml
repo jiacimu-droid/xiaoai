@@ -1,0 +1,30 @@
+name: Restore verified v1219 source
+on:
+  push:
+    branches: [import/v1219-android]
+    paths: ['.import-v1219/**']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore exact original Android snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = 155986143854902f64c4a34be280a793cf44bed7
+          cat .import-v1219/part-* > "$RUNNER_TEMP/xiaoai.zip"
+          echo "0cafeb1a3066f15500ff97881c06928ee0c27d47a2f7f53f2161c1c8a6c0a4ad  $RUNNER_TEMP/xiaoai.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/xiaoai.zip" -d "$RUNNER_TEMP/xiaoai"
+          cp -a "$RUNNER_TEMP/xiaoai/xiaoai-main/." .
+          test "$(git hash-object ci/test-signing.jks)" = c982bfd903de2c03fe9a76e60b3d2696336f5260
+          echo "4cfb93f8b0201f38754b6cdf4fbf35b4ded13568d3ab24605b9e3e816ec5117d  app/src/main/assets/index.html" | sha256sum -c -
+          node --test tests/*.test.cjs
+          git rm -r .import-v1219
+          git add -A
+          git diff --cached --stat
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Restore verified v1219 Android source'
+          git push origin HEAD:refs/heads/import/v1219-android
