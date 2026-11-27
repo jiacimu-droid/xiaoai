@@ -230,6 +230,84 @@ public final class PhoneService extends AccessibilityService {
         List<AccessibilityNodeInfo> matches=r.findAccessibilityNodeInfosByText(s);AccessibilityNodeInfo found=null;
         for(AccessibilityNodeInfo n:matches){if(!n.isVisibleToUser())continue;String t=String.valueOf(n.getText()),d=String.valueOf(n.getContentDescription());if(!s.equals(t)&&!s.equals(d))continue;if(found!=null)return null;found=n;}return found;
     }
+    private boolean editable(AccessibilityNodeInfo n){
+        return n!=null&&n.isVisibleToUser()&&n.isEnabled()&&n.isEditable()&&!n.isPassword()&&belongsToTarget(n);
+    }
+    private boolean matchesHint(AccessibilityNodeInfo n,String hint){
+        return hint.isEmpty()||hint.equals(String.valueOf(n.getHintText()))||hint.equals(String.valueOf(n.getText()))||hint.equals(String.valueOf(n.getContentDescription()))||hint.equals(n.getViewIdResourceName());
+    }
+    private void findInputs(AccessibilityNodeInfo n,String hint,List<AccessibilityNodeInfo> found,int depth,int[] count){
+        if(n==null||depth>30||++count[0]>1000)return;
+        if(editable(n)&&matchesHint(n,hint))found.add(n);
+        for(int i=0;i<n.getChildCount();i++)findInputs(n.getChild(i),hint,found,depth+1,count);
+    }
+    private AccessibilityNodeInfo chooseInput(AccessibilityNodeInfo r,String hint){
+        AccessibilityNodeInfo current=input(r);
+        if(current!=null&&matchesHint(current,hint))return current;
+        List<AccessibilityNodeInfo> found=new ArrayList<>();
+        findInputs(r,hint,found,0,new int[]{0});
+        return found.size()==1?found.get(0):null;
+    }
+    private boolean genericBox(String hint){
+        return hint.matches("輸入框|输入框|對話框|对话框|聊天框|輸入|输入");
+    }
+    private void focusInput(long g,AccessibilityNodeInfo r,String hint,Consumer<JSONObject> cb,Consumer<AccessibilityNodeInfo> next){
+        if(g!=generation){cb.accept(result(false,"任務已停止",""));return;}
+        if(genericBox(hint))hint="";
+        final String wanted=hint;
+        AccessibilityNodeInfo node=chooseInput(r,wanted);
+        if(node==null){finish(g,cb,false,"找不到唯一可用的输入框，请指定提示文字或先点击目标输入框");return;}
+        AccessibilityNodeInfo current=input(r);
+        if(current!=null&&current.equals(node)){next.accept(current);return;}
+        final int window=r.getWindowId();
+        node.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
+        h.postDelayed(()->{
+            if(g!=generation){cb.accept(result(false,"任務已停止",""));return;}
+            AccessibilityNodeInfo updated=root();
+            if(updated==null||updated.getWindowId()!=window){finish(g,cb,false,"输入框所在窗口已变化，请重新观察");return;}
+            AccessibilityNodeInfo f=input(updated);
+            if(f!=null&&matchesHint(f,wanted)){next.accept(f);return;}
+            AccessibilityNodeInfo candidate=chooseInput(updated,wanted);
+            if(candidate==null){finish(g,cb,false,"找不到唯一可用的输入框");return;}
+            Rect b=new Rect(), bounds=new Rect();candidate.getBoundsInScreen(b);updated.getBoundsInScreen(bounds);
+            if(b.isEmpty()||!bounds.contains(b.centerX(),b.centerY())||dangerousAt(updated,b.centerX(),b.centerY(),0)){
+                finish(g,cb,false,"输入框位置不安全或不可见");return;
+            }
+            Path path=new Path();path.moveTo(b.centerX(),b.centerY());
+            GestureDescription gesture=new GestureDescription.Builder().addStroke(new GestureDescription.StrokeDescription(path,0,80)).build();
+            boolean accepted=dispatchGesture(gesture,new GestureResultCallback(){
+                @Override public void onCompleted(GestureDescription gd){
+                    h.postDelayed(()->{
+                        if(g!=generation){cb.accept(result(false,"任務已停止",""));return;}
+                        AccessibilityNodeInfo after=root();
+                        AccessibilityNodeInfo focused=after==null?null:input(after);
+                        if(after==null||after.getWindowId()!=window||focused==null||!matchesHint(focused,wanted)){
+                            finish(g,cb,false,"点击后未取得输入框焦點，请重新观察");return;
+                        }
+                        next.accept(focused);
+                    },500);
+                }
+                @Override public void onCancelled(GestureDescription gd){finish(g,cb,false,"输入框点击手势被取消");}
+            },h);
+            if(!accepted)finish(g,cb,false,"Android 拒绝输入框点击");
+        },350);
+    }
+    private void writeFocused(long g,AccessibilityNodeInfo f,String t,Consumer<JSONObject> cb){
+        if(g!=generation){cb.accept(result(false,"任務已停止",""));return;}
+        AccessibilityNodeInfo r=root();
+        AccessibilityNodeInfo active=r==null?null:input(r);
+        if(active==null||!active.equals(f)){finish(g,cb,false,"输入框焦點已变化");return;}
+        final int window=r.getWindowId();
+        Bundle b=new Bundle();b.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,t);
+        if(!active.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,b)){finish(g,cb,false,"Android 未接受输入动作");return;}
+        h.postDelayed(()->{
+            if(g!=generation){cb.accept(result(false,"任务已停止",""));return;}
+            AccessibilityNodeInfo updated=root();
+            boolean verified=updated!=null&&updated.getWindowId()==window&&hasText(input(updated),t);
+            if(verified){draft=t;draftWindow=window;}
+            finish(g,cb,verified,verified?"已观察到输入框文字与请求一致":"输入请求已接受，但未确认文字，请重新定位输入框");
+        },450);
+    }
     private boolean click(AccessibilityNodeInfo n){for(int i=0;n!=null&&i<6;i++,n=n.getParent()){if(n.isClickable()&&n.isEnabled())return n.performAction(AccessibilityNodeInfo.ACTION_CLICK);}return false;}
     private boolean dangerousAt(AccessibilityNodeInfo n,int x,int y,int d){if(n==null||d>30)return false;Rect b=new Rect();n.getBoundsInScreen(b);if(!b.contains(x,y))return false;if(risky(String.valueOf(n.getText()))||risky(String.valueOf(n.getContentDescription())))return true;for(int j=0;j<n.getChildCount();j++)if(dangerousAt(n.getChild(j),x,y,d+1))return true;return false;}
     private AccessibilityNodeInfo input(AccessibilityNodeInfo r){
@@ -296,7 +374,14 @@ public final class PhoneService extends AccessibilityService {
         boolean ok=false;String why="Android 已接受動作";long g=generation;busy=true;
         try{
             switch(action){
-                case "tap_text": {String t=a.optString("text");if(t.trim().isEmpty()||risky(t))throw new IllegalArgumentException("此操作需由使用者親手完成");AccessibilityNodeInfo node=exact(r,t);ok=click(node);
+                case "focus_input": {focusInput(g,r,a.optString("box").trim(),cb,f->finish(g,cb,true,"已取得焦點"));return;}
+                case "tap_text": {String t=a.optString("text").trim();if(t.isEmpty()||risky(t))throw new IllegalArgumentException("此操作需由使用者親手完成");AccessibilityNodeInfo node=exact(r,t);
+                    if(node==null||editable(node)){
+                        if(editable(node)||chooseInput(r,t)!=null||genericBox(t)){
+                            focusInput(g,r,t,cb,f->finish(g,cb,true,"已取得焦點"));return;
+                        }
+                    }
+                    ok=click(node);
                     if(!ok&&node!=null){
                         Rect b=new Rect();node.getBoundsInScreen(b);Rect window=new Rect();r.getBoundsInScreen(window);
                         if(!b.isEmpty()&&window.contains(b.centerX(),b.centerY())&&!dangerousAt(r,b.centerX(),b.centerY(),0)){
@@ -310,15 +395,11 @@ public final class PhoneService extends AccessibilityService {
                         }
                     }
                     break;}
-                case "type_text": {clearDraft();String t=a.optString("text");AccessibilityNodeInfo f=input(r);if(f==null||t.isEmpty()||t.length()>800)throw new IllegalArgumentException("找不到已聚焦的输入框，或文字过长");Bundle b=new Bundle();b.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,t);ok=f.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT,b);
-                    if(ok){h.postDelayed(()->{
-                        if(g!=generation){cb.accept(result(false,"任务已停止",""));return;}
-                        AccessibilityNodeInfo updated=root();
-                        boolean verified=updated!=null&&hasText(input(updated),t);
-                        if(verified){draft=t;draftWindow=updated.getWindowId();}
-                        finish(g,cb,verified,verified?"已观察到输入框文字与请求一致":"输入请求已接受，但未确认文字，请重新定位输入框");
-                    },450);return;}
-                    break;}
+                case "type_text": {clearDraft();String t=a.optString("text");if(t.isEmpty()||t.length()>800)throw new IllegalArgumentException("输入文字为空或过长");
+                    AccessibilityNodeInfo f=input(r);
+                    if(f!=null)writeFocused(g,f,t,cb);
+                    else focusInput(g,r,a.optString("box").trim(),cb,focused->writeFocused(g,focused,t,cb));
+                    return;}
                 case "back":ok=performGlobalAction(GLOBAL_ACTION_BACK);break;
                 case "send_key":throw new IllegalArgumentException("發送或提交請由使用者親手完成");
                 case "tap_xy":case "long_press":case "swipe": {
