@@ -40,7 +40,10 @@ function close(){
   clearInterval(p.tick);
   if(p.media&&p.listeners)for(const [kind,fn]of p.listeners)p.media.removeEventListener(kind,fn);
   send(p,'pause');p.root.remove();
-  if(p.avatar)p.avatar.style.display=p.avatarDisplay;
+  if(p.kind==='call'){
+    p.name.before(p.avatar);
+    delete p.overlay.dataset.live2d;
+  }
   return true;
 }
 function unmountFrame(p){
@@ -54,6 +57,10 @@ function savedZones(p){
 function mountFrame(p){
   unmountFrame(p);
   if(!p.data?.core||!p.data?.model){
+    if(p.kind==='call'){
+      p.status.textContent=p.data?.model?'請先在聊天的 Live2D 面板安裝官方 Core':'請先在聊天的 Live2D 面板匯入這位好友的皮套';
+      return;
+    }
     p.stage.append(make('div','xa-l2d-empty',!p.data?.core?(p.data?.model?'皮套已保存，尚缺渲染核心。請點官方 Core 一鍵安裝。':'請匯入 Live2D ZIP，並安裝官方 Core。'):'請匯入自己的 Live2D ZIP'));
     return;
   }
@@ -79,7 +86,8 @@ function controls(p){
 async function loadStatus(p,action='status'){
   if(panel!==p||p.loading)return;
   p.loading=true;p.status.textContent=action==='status'?'讀取本地皮套…':action==='install_core'?'等待授權並下載官方渲染核心…':'等待檔案選擇及校驗…';
-  p.pickModel.disabled=p.pickCore.disabled=p.installCore.disabled=true;
+  const buttons=[p.pickModel,p.pickCore,p.installCore].filter(Boolean);
+  for(const button of buttons)button.disabled=true;
   try{
     const result=await rpc(action,p.role);
     if(panel!==p)return;
@@ -93,7 +101,7 @@ async function loadStatus(p,action='status'){
     if(!old||action!=='status'||old.model!==result.model||old.core!==result.core)mountFrame(p);
     controls(p);
   }catch(e){if(panel===p)p.status.textContent=String(e.message||e);}
-  finally{p.loading=false;p.pickModel.disabled=p.pickCore.disabled=p.installCore.disabled=false;}
+  finally{p.loading=false;for(const button of buttons)button.disabled=false;}
 }
 function selectedMotion(p){
   try{
@@ -103,7 +111,7 @@ function selectedMotion(p){
 }
 // Decode locally generated TTS audio separately from playback: never reroute or mute
 // the existing audio element, and never fetch remote voice URLs for lip sync.
-const speechEnvelopes=new WeakMap();
+const speechEnvelopes=new WeakMap(),speechMotions=new WeakMap();
 function speechEnvelope(media){
   const source=media.currentSrc||media.src||'';
   if(!/^(blob:|data:audio\/)/i.test(source)||source.length>32*1024*1024)return null;
@@ -158,10 +166,10 @@ function watchMedia(p,media){
     if(panel!==p||p.media!==media||p.speaking)return;
     p.speaking=true;p.speechSequence=++seq;
     speechEnvelope(media);
-    const motion=p.nextMotion;p.nextMotion=null;
-    if(motion){
+    const motion=speechMotions.get(media);
+    if(motion&&p.data?.motions.some(m=>m.group===motion.group&&m.index===motion.index&&m.name===motion.name)){
       const cue={visualSequence:p.speechSequence,motion:{group:motion.group,index:motion.index}};
-      if(motion.expression&&p.data.expressions.includes(motion.expression))cue.expression=motion.expression;
+      if(motion.expression&&p.data?.expressions.includes(motion.expression))cue.expression=motion.expression;
       if(motion.face)cue.face=motion.face;
       send(p,'perform',{cue});
     }
@@ -184,23 +192,77 @@ function tick(p){
     if(!chat?.classList.contains('on')||roleKey(currentRole())!==p.role){close();return;}
     try{if(__vAudio&&String(__vKey||'').startsWith(String(currentRole().id)+':'))media=__vAudio;}catch(_){}
   }else if(p.kind==='call'){
-    const overlay=document.getElementById('callOverlay');
-    if(!overlay?.classList.contains('show')||typeof callChar==='undefined'||roleKey(callChar)!==p.role){close();return;}
     try{media=callAudio;thinking=!!callBusy;}catch(_){}
   }
   watchMedia(p,media);
   if(p.ready)send(p,'update',{state:{speaking:!!p.speaking,thinking,...mouthState(p)}});
+}
+function touchMode(p){
+  const mode=make('select','xa-l2d-select');
+  mode.setAttribute('aria-label','觸摸方式');
+  for(const [value,label]of [['hand','摸摸'],['kiss','親親'],['pat','輕拍']])mode.append(new Option(label,value));
+  mode.onchange=()=>{p.mode=mode.value;send(p,'mode',{mode:p.mode});};
+  return mode;
+}
+function showMotion(p,motion){
+  send(p,'motion',{motion});
+  if(motion.expression&&p.data?.expressions.includes(motion.expression))send(p,'expression',{name:motion.expression});
+}
+function motionControls(p){
+  const row=make('div','xa-l2d-tools');
+  p.motions=make('select','xa-l2d-select');p.expressions=make('select','xa-l2d-select');
+  p.motions.setAttribute('aria-label','動作');
+  p.expressions.setAttribute('aria-label','表情');
+  p.motions.onchange=()=>{
+    const m=selectedMotion(p);if(!m||!p.ready)return;
+    showMotion(p,m);p.motions.value='';
+  };
+  p.expressions.onchange=()=>{if(p.ready&&p.expressions.value)send(p,'expression',{name:p.expressions.value});p.expressions.value='';};
+  row.append(p.motions,p.expressions);
+  return row;
+}
+function syncCall(){
+  const overlay=document.getElementById('callOverlay');
+  const toggle=document.getElementById('xaLive2DCallToggle');
+  if(!overlay||!toggle)return;
+  toggle.textContent=callVideoOn?'返回語音':'Live2D 視訊';
+  toggle.setAttribute('aria-pressed',String(callVideoOn));
+  toggle.hidden=callPhase==='incoming'||callPhase==='idle';
+  if(!callVideoOn||!callChar||!overlay.classList.contains('show')){
+    if(panel?.kind==='call')close();
+    return;
+  }
+  if(panel?.kind==='call'&&panel.session===callLog)return;
+  close();
+  const avatar=document.getElementById('callAv'),name=document.getElementById('callName');
+  const root=make('section','xa-l2d-call'),stage=make('div','xa-l2d-call-stage');
+  const fallback=make('div','xa-l2d-call-fallback'),status=make('div','xa-l2d-call-status','正在載入皮套…');
+  status.setAttribute('role','status');
+  fallback.append(avatar,status);
+  const p={kind:'call',role:roleKey(callChar),session:callLog,mode:'hand',ready:false,root,stage,status,avatar,name,overlay,fallback};
+  const interaction=make('details','xa-l2d-call-interaction');
+  interaction.hidden=true;
+  const tools=motionControls(p);tools.prepend(touchMode(p));
+  interaction.append(make('summary','','互動'),tools);
+  p.interaction=interaction;
+  root.append(stage,fallback,interaction);
+  name.closest('.call-hero').after(root);
+  overlay.dataset.live2d='';
+  panel=p;
+  controls(p);
+  p.tick=setInterval(()=>tick(p),40);
+  loadStatus(p);
 }
 function open(kind,c){
   const role=kind==='preview'?(roleKey(c)||'preview'):roleKey(c);
   if(!role){toastLocal('請先選擇好友');return;}
   if(panel&&panel.kind===kind&&panel.role===role){close();return;}
   close();
-  const p={kind,role,mode:'hand',ready:false,data:null,frame:null,loading:false,media:null,nextMotion:null};
+  const p={kind,role,mode:'hand',ready:false,data:null,frame:null,loading:false,media:null};
   panel=p;
   const root=make('section','xa-l2d '+(kind==='preview'?'xa-l2d-full':'xa-l2d-inline'));
   p.root=root;
-  const bar=make('div','xa-l2d-bar'),title=make('strong','',kind==='preview'?'Live2D 檢驗':kind==='call'?'Live2D 視訊':'Live2D · '+roleLabel(c));
+  const bar=make('div','xa-l2d-bar'),title=make('strong','',kind==='preview'?'Live2D 檢驗':'Live2D · '+roleLabel(c));
   bar.append(title,btn('關閉',close));root.append(bar);
   if(kind==='preview'){
     const sel=make('select','xa-l2d-select');
@@ -224,19 +286,11 @@ function open(kind,c){
   toolbar.append(p.pickModel,p.installCore,p.pickCore);
   if(kind==='chat')toolbar.append(btn('視訊通話',()=>{
     const char=currentRole();if(!char||char.blocked)return toastLocal('此好友不可通話');
-    close();callOpen(char,'outgoing');open('call',char);
+    close();callOpen(char,'outgoing',true);
   }));
-  const mode=make('select','xa-l2d-select');
-  for(const [value,label]of [['hand','摸摸'],['kiss','親親'],['pat','輕拍']])mode.append(new Option(label,value));
-  mode.onchange=()=>{p.mode=mode.value;send(p,'mode',{mode:p.mode});};toolbar.append(mode);
+  toolbar.append(touchMode(p));
   root.append(toolbar);
-  const row=make('div','xa-l2d-tools');p.motions=make('select','xa-l2d-select');p.expressions=make('select','xa-l2d-select');
-  p.motions.onchange=()=>{
-    const m=selectedMotion(p);if(!m||!p.ready)return;
-    send(p,'motion',{motion:m});p.motions.value='';
-  };
-  p.expressions.onchange=()=>{if(p.ready&&p.expressions.value)send(p,'expression',{name:p.expressions.value});p.expressions.value='';};
-  row.append(p.motions,p.expressions);root.append(row);
+  root.append(motionControls(p));
   if(kind==='preview'){
     const calibration=make('div','xa-l2d-tools'),zone=make('select','xa-l2d-select');
     zone.append(new Option('觸摸部位校準',''));
@@ -246,12 +300,7 @@ function open(kind,c){
     root.append(calibration);
   }
   if(kind==='preview')document.body.append(root);
-  else if(kind==='chat')document.getElementById('chatHeader').after(root);
-  else{
-    const av=document.getElementById('callAv');p.avatar=av;
-    if(av){p.avatarDisplay=av.style.display;av.style.display='none';av.after(root);}
-    else document.getElementById('callOverlay').prepend(root);
-  }
+  else document.getElementById('chatHeader').after(root);
   controls(p);p.tick=setInterval(()=>tick(p),40);loadStatus(p);
 }
 window.addEventListener('message',event=>{
@@ -260,36 +309,78 @@ window.addEventListener('message',event=>{
   const d=event.data;
   if(d.type==='xa-live2d-state'){
     p.ready=d.phase==='ready';p.status.textContent=p.ready?'已驗證模型畫面 · '+(p.data?.label||''):String(d.message||d.phase);
+    if(p.kind==='call'){
+      p.fallback.hidden=p.ready;
+      p.stage.style.visibility=p.ready?'visible':'hidden';
+      p.interaction.hidden=!p.ready;
+      if(p.ready&&p.speaking)send(p,'event',{event:'playing',sequence:p.speechSequence});
+      if(!p.ready&&d.phase==='error')p.status.textContent='皮套無法顯示，請在 Live2D 檢驗確認';
+    }
     controls(p);
   }else if(d.type==='xa-live2d-calibration'&&d.calibration&&typeof d.calibration==='object'){
     try{localStorage.setItem(calibrationKey(p),JSON.stringify(d.calibration));}catch(_){}
   }
 });
-// Actual call response uses its existing request, not a second model call.
-// Motion choices are accepted only from this skin's current real resource list.
-try{
-  const original=sendChat;
-  sendChat=async function(cfg,msgs,opts){
-    const p=panel;
-    let enabled=false;
-    try{enabled=!!(p&&p.kind==='call'&&p.ready&&p.data?.motions.length&&roleKey(callChar)===p.role&&callBusy&&Array.isArray(msgs)&&typeof msgs[0]?.content==='string'&&msgs[0].content.includes('【語音通話模式】'));}catch(_){}
-    if(!enabled)return original.apply(this,arguments);
-    const motions=p.data.motions;
-    const directory=motions.map((m,i)=>i+'='+m.name+(m.fits?'（'+String(m.fits).slice(0,180)+'）':'')).join('、');
-    const edited=[{...msgs[0],content:msgs[0].content+'\n【Live2D】可自行選擇真實動作；若適合，在回覆最末尾加一個 [L2D:數字]，數字從當前目錄選。不要在台詞中提到標記。動作目錄：'+directory},...msgs.slice(1)];
-    const result=await original.call(this,cfg,edited,opts);
-    if(typeof result!=='string')return result;
-    const matches=[...result.matchAll(/\[L2D:(\d{1,4})\]/gi)];
-    if(panel===p&&matches.length){
-      const index=Number(matches.at(-1)[1]);p.nextMotion=motions[index]||null;
+function callMotionOptions(){
+  const p=panel;
+  if(p?.kind!=='call'||!p.ready||!p.data.motions.length)return null;
+  const available=p.data.motions.filter(m=>m.group!=='Idle');
+  const described=available.filter(m=>m.fits);
+  const motions=described.length?described:available;
+  if(!motions.length)return null;
+  const directory=motions.map((m,i)=>i+'='+m.name+(m.fits?'（'+String(m.fits).slice(0,180)+'）':'')).join('、');
+  return {
+    prompt:'\n【Live2D】可自行選擇真實動作；若適合，在回覆最末尾加一個 [L2D:數字]，數字從當前目錄選。不要在台詞中提到標記。動作目錄：'+directory,
+    parse(reply){
+      if(typeof reply!=='string')return {reply,motion:null};
+      let motion=null;
+      const text=reply.replace(/\[L2D:(\d{1,4})\]/gi,(_,index)=>{motion=motions[Number(index)]||null;return '';});
+      return {reply:text.trim(),motion};
     }
-    return result.replace(/\[L2D:\d{1,4}\]/gi,'').trim();
   };
-}catch(e){console.warn('Live2D call choice hook',e);}
+}
 const style=make('style');
-style.textContent='.xa-l2d{box-sizing:border-box;display:flex;flex-direction:column;gap:6px;padding:8px;color:var(--ink,#333);background:var(--paper,#faf7f3);border:1px solid var(--line,#ddd);border-radius:14px;min-height:0;flex-shrink:0}.xa-l2d-full{position:fixed;inset:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px);z-index:99999;border-radius:0;padding:12px}.xa-l2d-inline{margin:4px 8px}.xa-l2d-bar,.xa-l2d-tools{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.xa-l2d-bar strong{flex:1}.xa-l2d-stage{position:relative;min-height:140px;height:180px;overflow:hidden;background:#e9edf4;border-radius:11px;flex-shrink:0}.xa-l2d-full .xa-l2d-stage{height:auto;flex:1;min-height:150px}.xa-l2d-frame{width:100%;height:100%;border:0;display:block}.xa-l2d-empty{height:100%;display:grid;place-items:center;text-align:center;color:#596470;font-size:13px;padding:14px}.xa-l2d-btn,.xa-l2d-select{font:inherit;font-size:12px;min-height:32px;border:1px solid var(--line,#ccc);color:inherit;background:var(--paper,#fff);border-radius:9px;padding:4px 8px;max-width:100%}.xa-l2d-status{font-size:11px;color:inherit;opacity:.8;overflow-wrap:anywhere}.xa-l2d-tools select{flex:1;min-width:60px}.xa-l2d-chat{border:0;background:none;color:inherit;font-size:11px;min-width:40px;padding:6px}.xa-l2d-chat svg{display:block;width:19px;height:19px;margin:auto}#callOverlay .xa-l2d{width:min(94vw,420px);max-height:48vh;margin:5px auto;color:#333;background:#faf7f3;overflow:auto}#callOverlay .xa-l2d-stage{height:clamp(115px,24vh,230px);min-height:110px}';
+style.textContent='.xa-l2d{box-sizing:border-box;display:flex;flex-direction:column;gap:6px;padding:8px;color:var(--ink,#333);background:var(--paper,#faf7f3);border:1px solid var(--line,#ddd);border-radius:14px;min-height:0;flex-shrink:0}.xa-l2d-full{position:fixed;inset:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px);z-index:99999;border-radius:0;padding:12px}.xa-l2d-inline{margin:4px 8px}.xa-l2d-bar,.xa-l2d-tools{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.xa-l2d-bar strong{flex:1}.xa-l2d-stage{position:relative;min-height:140px;height:180px;overflow:hidden;background:#e9edf4;border-radius:11px;flex-shrink:0}.xa-l2d-full .xa-l2d-stage{height:auto;flex:1;min-height:150px}.xa-l2d-frame{width:100%;height:100%;border:0;display:block}.xa-l2d-empty{height:100%;display:grid;place-items:center;text-align:center;color:#596470;font-size:13px;padding:14px}.xa-l2d-btn,.xa-l2d-select{font:inherit;font-size:12px;min-height:32px;border:1px solid var(--line,#ccc);color:inherit;background:var(--paper,#fff);border-radius:9px;padding:4px 8px;max-width:100%}.xa-l2d-status{font-size:11px;color:inherit;opacity:.8;overflow-wrap:anywhere}.xa-l2d-tools select{flex:1;min-width:60px}.xa-l2d-chat{border:0;background:none;color:inherit;font-size:11px;min-width:40px;padding:6px}.xa-l2d-chat svg{display:block;width:19px;height:19px;margin:auto}';
+style.textContent+=`
+#callOverlay .xa-l2d-call-toggle {position:absolute;right:12px;top:7px;z-index:7;min-height:36px;padding:0 10px;border:1px solid currentColor;border-radius:18px;background:var(--ovbg);color:inherit;font:inherit;font-size:12px;cursor:pointer}
+#callOverlay[data-live2d] {overflow:hidden}
+#callOverlay[data-live2d] .call-min {top:10px;left:12px}
+#callOverlay[data-live2d] .call-hero {min-height:54px;padding:8px 104px 6px 52px;justify-content:center}
+#callOverlay[data-live2d] .call-name {display:block;margin:0;max-width:100%;padding:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px;font-weight:600}
+#callOverlay[data-live2d] .call-status {margin:1px 0 0;padding:0;font-size:11px;letter-spacing:normal}
+#callOverlay[data-live2d] .xa-l2d-call {position:relative;flex:1 1 0;min-height:0;width:calc(100% - 20px);max-width:620px;border-radius:16px;overflow:hidden;background:#e9edf4;color:#2d3d4d}
+.xa-l2d-call-stage,.xa-l2d-call-fallback {position:absolute;inset:0}
+.xa-l2d-call-stage {visibility:hidden}
+.xa-l2d-call-fallback {display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:8px;text-align:center;overflow:auto}
+.xa-l2d-call [hidden] {display:none}
+#callOverlay[data-live2d] .xa-l2d-call .call-av {width:64px;height:64px;border-radius:14px;font-size:27px}
+.xa-l2d-call-status {font-size:12px}
+.xa-l2d-call-interaction {position:absolute;top:8px;right:8px;left:8px;text-align:right;pointer-events:none}
+.xa-l2d-call-interaction summary {display:inline-block;padding:7px 10px;border-radius:14px;background:#253647e8;color:white;font-size:12px;cursor:pointer;pointer-events:auto}
+.xa-l2d-call-interaction .xa-l2d-tools {margin-top:4px;padding:5px;border-radius:10px;background:var(--paper,#fff);pointer-events:auto}
+#callOverlay[data-live2d] #callCaps {flex:0 1 auto;max-height:24%;padding:6px 12px 1px}
+#callOverlay[data-live2d] #callCaps:empty {display:none}
+#callOverlay[data-live2d] .call-inrow {width:calc(100% - 24px);margin:6px 0}
+#callOverlay[data-live2d] .call-actions {gap:clamp(10px,5vw,26px);padding:2px 8px max(10px, env(safe-area-inset-bottom));margin:0}
+#callOverlay[data-live2d] .call-act {width:64px;gap:5px}
+#callOverlay[data-live2d] .call-btn {width:44px;height:44px;padding:0;border-radius:50%}
+#callOverlay[data-live2d] .call-btn svg {width:24px;height:24px}
+#callOverlay[data-live2d] .call-act-lab {font-size:10px}
+@media (max-height: 480px) {
+  #callOverlay[data-live2d] .call-hero {min-height:44px;padding-top:3px}
+  #callOverlay[data-live2d] .call-inrow {margin:2px 0}
+  #callOverlay[data-live2d] .call-actions {padding-bottom:4px}
+  #callOverlay[data-live2d] .call-act-lab {display:none}
+}
+`;
 document.head.append(style);
 function install(){
+  const overlay=document.getElementById('callOverlay');
+  if(overlay){
+    const toggle=btn('Live2D 視訊',()=>callVideoToggle());
+    toggle.id='xaLive2DCallToggle';toggle.className='xa-l2d-call-toggle';toggle.hidden=true;
+    overlay.append(toggle);
+  }
   const header=document.getElementById('chatHeader');
   if(header&&!document.getElementById('xaLive2DChat')){
     const b=btn('Live2D',()=>open('chat',currentRole()));b.id='xaLive2DChat';b.className='xa-l2d-chat';
@@ -319,6 +410,6 @@ function install(){
     };
   }catch(e){console.warn('Live2D desktop',e);}
 }
-window.XaLive2D={openPreview:()=>open('preview',null),closeIfOpen:close};
+window.XaLive2D={openPreview:()=>open('preview',null),closeIfOpen:close,syncCall,callMotionOptions,playSilentMotion:motion=>{if(motion&&panel?.kind==='call'&&panel.ready&&panel.data.motions.includes(motion))showMotion(panel,motion);},setSpeechMotion:(audio,motion)=>speechMotions.set(audio,motion)};
 install();
 })();

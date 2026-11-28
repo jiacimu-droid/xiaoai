@@ -232,6 +232,8 @@ let faceRequest = null
 let faceRequestEndAt = 0
 let faceRequestStartedAt = 0
 let authoredMotion = null
+let skinCameraMotions = new Map()
+let skinCameraCue = null
 let proximityCameraLease = null
 let pendingPostSpeechKiss = null
 let cameraBasePose = null
@@ -379,6 +381,14 @@ function applyProximityCameraPose(now = performance.now()) {
         faceRequestStartedAt <= active.faceIssuedAt)
       faceRequest = null
     proximityCameraLease = null
+  }
+  if (skinCameraCue && !active) {
+    const progress = Math.min(1, (now - skinCameraCue.startedAt) / skinCameraCue.duration)
+    const zoom = 1 + (skinCameraCue.zoom - 1) * Math.sin(Math.PI * progress) ** 2
+    model.scale.set(base.scale * zoom)
+    model.position.set(base.x, base.y + base.height * .26 * (zoom - 1))
+    if (progress === 1) skinCameraCue = null
+    return
   }
   const zoom = frame.zoom
   // Follow the actual face rather than enlarging around the torso pivot:
@@ -877,6 +887,20 @@ async function load(modelURL) {
     const modelSettings = await settingsResponse.json()
     const importedRig = modelSettings.luluResolvedRigProfiles?.rig
     const importedInteraction = modelSettings.luluResolvedRigProfiles?.interaction
+    skinCameraCue = null
+    skinCameraMotions = new Map()
+    const cameraGroup = importedRig?.motionGroup
+    const cameraClips = modelSettings.FileReferences?.Motions?.[cameraGroup]
+    if (Array.isArray(cameraClips) && Array.isArray(importedRig.motionCatalog)) {
+      for (const item of importedRig.motionCatalog) {
+        const camera = item?.camera
+        if (!Number.isInteger(item?.index) || !cameraClips[item.index] ||
+            item.file !== cameraClips[item.index].File ||
+            !Number.isFinite(camera?.zoom) || camera.zoom < .8 || camera.zoom > 1.3 ||
+            !Number.isFinite(camera?.durationMs) || camera.durationMs < 600 || camera.durationMs > 5000) continue
+        skinCameraMotions.set(cameraGroup + ':' + item.index, { zoom: camera.zoom, duration: camera.durationMs })
+      }
+    }
     const importedGroup = importedInteraction?.motionGroup
     const importedMotions = typeof importedGroup === 'string' && importedGroup === importedRig?.motionGroup
       ? modelSettings.FileReferences?.Motions?.[importedGroup] : null
@@ -1808,6 +1832,7 @@ function touch(normalizedX, normalizedY, gesture = 'tap', options = {}) {
 function setPaused(value) {
   paused = !!value
   if (paused) {
+    skinCameraCue = null
     touchResponse.end()
     // Do not play a stale animation score in a burst when Android restores
     // the WebView after it was hidden while TTS continued in the background.
@@ -2167,6 +2192,8 @@ function motion(group, index, immediatePreview = false, source = 'character', op
       notify('diagnostic', 'Motion3 未启动：' + group + '#' + index + '（Cubism 播放器拒绝）')
     } else {
       chosen.started = true
+      const camera = skinCameraMotions.get(group + ':' + index)
+      skinCameraCue = camera ? { ...camera, startedAt: performance.now() } : null
       if (wolfRigActive && group === skinMotionGroup &&
           isScreenProximityMotion(index)) {
         const base = cameraBasePose

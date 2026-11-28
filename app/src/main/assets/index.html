@@ -12960,7 +12960,7 @@ function callRenderActions(){
    +callAct({c:'ac',i:CALL_IC.ans,l:'接聽',f:'callAnswer()'});
  }else if(k==='imsg'){
   h=callAct({c:'mic'+(callMuteOn?' off':''),i:callMuteOn?CALL_IC.micOff:CALL_IC.mic,f:'callMuteToggle()'})
-   +callAct({c:'vid',i:CALL_IC.video,f:'callVideoToggle()'})
+   +(window.XaLive2D?callAct({c:'spk'+(callTtsOn?'':' off'),i:CALL_IC.spk,f:'callTtsToggle()'}):callAct({c:'vid',i:CALL_IC.video,f:'callVideoToggle()'}))
    +callAct({c:'end',i:CALL_IC.hang,l:(callPhase==='connected'?fmtDur(callDur):''),id:'callHangLab',f:'endCall()'});
  }else{
   h=callAct({c:'mic'+(callMuteOn?' off':''),i:callMuteOn?CALL_IC.micOff:CALL_IC.mic,l:callMuteOn?'麥克風已關':'麥克風已開',f:'callMuteToggle()'})
@@ -12973,6 +12973,7 @@ function callSetPhase(p){
  callPhase=p||'idle';
  try{callApplySkin();}catch(e){}
  callRenderActions();callRenderMin();callUpdateStatus();
+ window.XaLive2D?.syncCall();
 }
 function callTick(){
  callUpdateStatus();
@@ -12990,14 +12991,15 @@ function callStartTimer(){
 function callPillOff(){var p=document.getElementById('callPill');if(p)p.style.display='none';}
 function callCloseOverlay(){
  var ov=document.getElementById('callOverlay');if(ov)ov.classList.remove('show');
+ callVideoOn=false;window.XaLive2D?.syncCall();
  callPillOff();
 }
-function callOpen(c,phase){
+function callOpen(c,phase,video=false){
  var ov=document.getElementById('callOverlay');if(!ov)return;
  var av=document.getElementById('callAv');
  if(av)av.innerHTML=(c.avatar?'<img src="'+c.avatar+'">':esc(String(c.name||'?').slice(0,1)));
  var nm=document.getElementById('callName');if(nm)nm.textContent=c.remark||c.name||'TA';
- callChar=c;callLog=[];callBusy=false;callDur=0;callMuteOn=false;callVideoOn=false;
+ callChar=c;callLog=[];callBusy=false;callDur=0;callMuteOn=false;callVideoOn=video;
  try{callHist=(typeof buildChatHist==='function')?buildChatHist(c).slice(-6):[];}catch(e){callHist=[];}
  callStopAudio();
  callSetPhase(phase);
@@ -13006,6 +13008,7 @@ function callOpen(c,phase){
  try{var sb=document.getElementById('callSend');if(sb)sb.classList.remove('off');}catch(e){}
  callPillOff();
  ov.classList.add('show');
+ window.XaLive2D?.syncCall();
  callStartTimer();
 }
 function startCall(){
@@ -13047,12 +13050,14 @@ function callMuteToggle(){
 }
 function callVideoToggle(){
  callVideoOn=!callVideoOn;
- callTip(callVideoOn?'這是語音通話，沒有畫面':'攝影機已關');
+ if(window.XaLive2D)window.XaLive2D.syncCall();
+ else callTip(callVideoOn?'這是語音通話，沒有畫面':'攝影機已關');
 }
 function callMinimize(){
  if(callPhase==='idle')return;
  var ov=document.getElementById('callOverlay');if(!ov)return;
  ov.classList.remove('show');
+ window.XaLive2D?.syncCall();
  var p=document.getElementById('callPill');
  if(p){
   p.style.display='flex';
@@ -13062,6 +13067,7 @@ function callMinimize(){
 }
 function callExpand(){
  var ov=document.getElementById('callOverlay');if(ov)ov.classList.add('show');
+ window.XaLive2D?.syncCall();
  callPillOff();
 }
 function endCall(){
@@ -13081,7 +13087,7 @@ function endCall(){
 }
 
 /* ================== 通話中：打字 → AI → MiniMax 朗讀 ================== */
-let callChar=null,callLog=[],callHist=[],callBusy=false,callTtsOn=true,callAudio=null;
+let callChar=null,callLog=[],callHist=[],callBusy=false,callTtsOn=true,callAudio=null,callSpeechRequest=0;
 function callRenderCaps(){
  const b=document.getElementById('callCaps');if(!b)return;
  const nm=(callChar?(callChar.remark||callChar.name):'TA')||'TA';
@@ -13101,26 +13107,33 @@ function callTip(t){
  if(last&&last.role==='sys')last.text=t;else callLog.push({role:'sys',text:t});
  callRenderCaps();
 }
-function callStopAudio(){try{if(callAudio){callAudio.pause();callAudio=null;}}catch(e){}}
+function callStopAudio(){
+ callSpeechRequest++;
+ const audio=callAudio;callAudio=null;
+ if(audio){audio.pause();URL.revokeObjectURL(audio.src);}
+}
 function callTtsToggle(){
  callTtsOn=!callTtsOn;
  if(!callTtsOn)callStopAudio();
  callRenderActions();
  callTip(callTtsOn?'語音朗讀已開啟':'語音朗讀已關掉，只出字幕');
 }
-function callSpeak(text){
+function callSpeak(text,motion){
  if(!text)return;
- if(!callTtsOn){callTip('朗讀已靜音（點揚聲器鈕可再開）');return;}
+ if(!callTtsOn){window.XaLive2D?.playSilentMotion(motion);callTip('朗讀已靜音（點揚聲器鈕可再開）');return;}
  let c=null;try{c=DB.get('ttsConfig',null);}catch(e){}
- if(!c||!c.key||!c.group){callTip('還沒配 MiniMax TTS（設置 → TTS 語音），這句先只出字幕');return;}
+ if(!c||!c.key||!c.group){window.XaLive2D?.playSilentMotion(motion);callTip('還沒配 MiniMax TTS（設置 → TTS 語音）');return;}
  if(typeof minimaxSpeak!=='function')return;
  callTip('正在用 MiniMax 合成語音…');
+ const session=callLog,request=++callSpeechRequest;
  minimaxSpeak(text,c).then(function(u){
+  if(session!==callLog||request!==callSpeechRequest){URL.revokeObjectURL(u);return;}
   callStopAudio();
   const a=new Audio(u);callAudio=a;
-  a.play().catch(function(){callTip('語音放不出來，先看字幕');});
-  a.addEventListener('ended',function(){callTipClear();try{URL.revokeObjectURL(u);}catch(e){}});
- }).catch(function(e){callTip('語音失敗：'+friendly(e));});
+  if(motion)window.XaLive2D?.setSpeechMotion(a,motion);
+  a.addEventListener('ended',function(){if(callAudio===a){callAudio=null;callTipClear();}URL.revokeObjectURL(u);},{once:true});
+  a.play().catch(function(){if(callAudio===a){callAudio=null;callTip('語音放不出來，先看字幕');}URL.revokeObjectURL(u);});
+ }).catch(function(e){if(session===callLog&&request===callSpeechRequest)callTip('語音失敗：'+friendly(e));});
 }
 function callTipClear(){if(callLog.length&&callLog[callLog.length-1].role==='sys')callLog.pop();callRenderCaps();}
 async function callSay(){
@@ -13137,15 +13150,18 @@ async function callSay(){
  callBusy=true;
  const sb=document.getElementById('callSend');if(sb)sb.classList.add('off');
  callTip('接通中…');
+ const session=callLog,visual=window.XaLive2D?.callMotionOptions();
  try{
   const sys=buildSys(callChar)+'\n\n【語音通話模式】現在你們正在講電話，她剛說的話你會直接聽見。請用講電話的口吻回應：繁體中文、口語、短句、一次 1~3 句、語氣比打字時更親更軟；不要加引號，不要寫動作旁白或場景描述，不要用 [語音]、[表情:xx] 這類標記，也不要反問「妳有聽到嗎」。';
-  const reply=await sendChat(cfg,[{role:'system',content:sys}].concat(callHist.slice(-16)));
+  const rawReply=await sendChat(cfg,[{role:'system',content:sys+(visual?.prompt||'')}].concat(callHist.slice(-16)));
+  if(callPhase==='idle'||session!==callLog)return;
+  const {reply,motion}=visual?.parse(rawReply)||{reply:rawReply};
   let parts=[];try{parts=parseReply(reply)||[];}catch(e2){parts=[{type:'text',content:String(reply||'')}];}
   const txt=(typeof xaSanitize==='function')?xaSanitize(parts.map(function(x){return String(x.content||'').trim();}).filter(Boolean).join(' ')).replace(/\s*\[(紅包|轉賬|轉帳|位置)\][^\n]*/g,''):parts.map(function(x){return x.content;}).join(' ').replace(/\s*\[(紅包|轉賬|轉帳|位置)\][^\n]*/g,'');
   const clean=String(txt||'').replace(/\s+/g,' ').trim();
   if(!clean){callTip('他這句沒講出內容，再問一次看看');}
-  else{callPush('ta',clean);callHist.push({role:'assistant',content:clean});callSpeak(clean);}
- }catch(e){callTip('斷線：'+friendly(e));}
+  else{callPush('ta',clean);callHist.push({role:'assistant',content:clean});callSpeak(clean,motion);}
+ }catch(e){if(callPhase==='idle'||session!==callLog)return;callTip('斷線：'+friendly(e));}
  callBusy=false;
  const sb2=document.getElementById('callSend');if(sb2)sb2.classList.remove('off');
 }
