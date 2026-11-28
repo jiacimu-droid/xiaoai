@@ -80,6 +80,13 @@ jobs:
       - name: Check fixed private-use signing key
         run: |
           test "$(git hash-object ci/test-signing.jks)" = "c982bfd903de2c03fe9a76e60b3d2696336f5260"
+      - name: Bundle shared Live2D renderer
+        run: |
+          node --check app/src/main/assets/live2d-entry.js
+          node --check app/src/main/assets/live2d/host.js
+          npm install --prefix tools/live2d --ignore-scripts --no-audit --no-fund --no-package-lock
+          npm run build --prefix tools/live2d
+          test -s app/src/main/assets/live2d/renderer.js
       - run: gradle --no-daemon --stacktrace :app:assembleDebug
       - name: Verify and stage APK
         run: |
@@ -91,8 +98,9 @@ jobs:
           python3 - "$apk" <<'PY'
           import sys, zipfile
           with zipfile.ZipFile(sys.argv[1]) as z:
-              for asset in ['phone-bridge.js', 'runtime-log.js', 'runtime-log-early.js']:
+              for asset in ['phone-bridge.js', 'runtime-log.js', 'runtime-log-early.js', 'live2d-entry.js', 'live2d/stage.html', 'live2d/bootstrap.js', 'live2d/host.js', 'live2d/renderer.js']:
                   assert 'assets/' + asset in z.namelist(), asset
+              assert not any(p.startswith('assets/live2d/wolf-motions/') or p.endswith('.moc3') for p in z.namelist()), 'private skin asset in APK'
               html = z.read('assets/index.html').decode('utf-8')
               assert 'id="xaNativeRow"' in html and 'id="xaLogStat"' in html
               assert html.index('src="runtime-log-early.js"') < html.index('src="phone-bridge.js"') < html.index('src="runtime-log.js"')

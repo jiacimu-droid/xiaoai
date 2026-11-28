@@ -277,7 +277,7 @@ final class Live2DStore {
         return manifest;
     }
     private static String url(String relative){
-        StringBuilder s=new StringBuilder(ORIGIN+"/private/");
+        StringBuilder s=new StringBuilder("https://live2d.xiaoai.invalid/private/");
         String[] parts=relative.split("/");
         for(int i=0;i<parts.length;i++){if(i>0)s.append('/');s.append(Uri.encode(parts[i]));}
         return s.toString();

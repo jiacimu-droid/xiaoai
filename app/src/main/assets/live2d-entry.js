@@ -58,7 +58,7 @@ function mountFrame(p){
     return;
   }
   const frame=make('iframe','xa-l2d-frame');
-  frame.title='Live2D';frame.sandbox='allow-scripts allow-same-origin';frame.referrerPolicy='no-referrer';
+  frame.title='Live2D';frame.setAttribute('sandbox','allow-scripts allow-same-origin');frame.referrerPolicy='no-referrer';
   p.frame=frame;
   frame.addEventListener('load',()=>{if(panel===p&&p.frame===frame)send(p,'init',{model:p.data.model,calibration:savedZones(p),mode:p.mode});});
   frame.src=STAGE+'/assets/live2d/stage.html';

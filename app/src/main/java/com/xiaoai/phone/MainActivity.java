@@ -25,6 +25,9 @@ public final class MainActivity extends Activity {
     private ValueCallback<Uri[]> chooser;
     private boolean resumed;
     private BackupFiles backupFiles;
+    private Live2DStore live2d;
+    private static final String STAGE_HOST="live2d.xiaoai.invalid";
+    private static WebResourceResponse notFound(){return new WebResourceResponse("text/plain","UTF-8",404,"Not Found",Collections.emptyMap(),new java.io.ByteArrayInputStream(new byte[0]));}
     private JavaScriptReplyProxy statusReply;
     private long statusRevision;
     private final Handler statusHandler=new Handler(Looper.getMainLooper());
@@ -40,6 +43,11 @@ public final class MainActivity extends Activity {
         s.setAllowFileAccess(false); s.setAllowContentAccess(true); s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         WebViewAssetLoader loader=new WebViewAssetLoader.Builder().addPathHandler("/assets/",new WebViewAssetLoader.AssetsPathHandler(this)).build();
         backupFiles=new BackupFiles(this);
+        live2d=new Live2DStore(this);
+        WebViewAssetLoader.AssetsPathHandler stageAssets=new WebViewAssetLoader.AssetsPathHandler(this);
+        WebViewAssetLoader stageLoader=new WebViewAssetLoader.Builder().setDomain(STAGE_HOST)
+            .addPathHandler("/assets/live2d/",path->java.util.Arrays.asList("stage.html","bootstrap.js","renderer.js","host.js").contains(path)?stageAssets.handle("live2d/"+path):notFound())
+            .addPathHandler("/private/",live2d::serve).build();
         web.setWebViewClient(new WebViewClient(){
             @Override public void onPageStarted(WebView v,String url,android.graphics.Bitmap favicon){
                 statusReply=null;
@@ -47,9 +55,9 @@ public final class MainActivity extends Activity {
             }
             @Override public void onPageFinished(WebView v,String url){
                 super.onPageFinished(v,url);
-                if((ORIGIN+"/assets/index.html").equals(url)) backupFiles.installScript(v);
+                if((ORIGIN+"/assets/index.html").equals(url)){backupFiles.installScript(v);live2d.installScript(v); }
             }
-            @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r){return loader.shouldInterceptRequest(r.getUrl());}
+            @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r){if(STAGE_HOST.equals(r.getUrl().getHost())){WebResourceResponse response=stageLoader.shouldInterceptRequest(r.getUrl());return response!=null?response:notFound();}return loader.shouldInterceptRequest(r.getUrl());}
             @Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){
                 if(!r.isForMainFrame())return false;
                 Uri u=r.getUrl();
@@ -71,6 +79,7 @@ public final class MainActivity extends Activity {
         });
         if(WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)){
             backupFiles.bind(web,ORIGIN);
+            live2d.bind(web);
             WebViewCompat.addWebMessageListener(web,"PhoneNative",Collections.singleton(ORIGIN),(view,msg,origin,main,reply)->{
                 if(!main||!isAppOrigin(origin))return;
                 String requestId=null;
@@ -216,7 +225,7 @@ public final class MainActivity extends Activity {
         for(long delay:new long[]{250,750,1500,3000,6000})statusHandler.postDelayed(refreshStatus,delay);
     }
     @Override protected void onPause(){resumed=false;statusHandler.removeCallbacks(refreshStatus);super.onPause();}
-    @Override protected void onActivityResult(int r,int c,Intent d){super.onActivityResult(r,c,d);if(backupFiles!=null&&backupFiles.onResult(r,c,d))return;if(r==42&&chooser!=null){chooser.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(c,d));chooser=null;}}
+    @Override protected void onActivityResult(int r,int c,Intent d){super.onActivityResult(r,c,d);if(live2d!=null&&live2d.onResult(r,c,d))return;if(backupFiles!=null&&backupFiles.onResult(r,c,d))return;if(r==42&&chooser!=null){chooser.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(c,d));chooser=null;}}
     @Override public void onBackPressed(){if(web.canGoBack())web.goBack();else super.onBackPressed();}
     @Override protected void onDestroy(){
         statusHandler.removeCallbacks(refreshStatus);
@@ -225,6 +234,7 @@ public final class MainActivity extends Activity {
         statusReply=null;
         if(PhoneService.instance!=null)PhoneService.instance.cancel();
         if(backupFiles!=null)backupFiles.close();
+        if(live2d!=null)live2d.close();
         if(chooser!=null){chooser.onReceiveValue(null);chooser=null;}
         if(web!=null)web.destroy();
         super.onDestroy();
