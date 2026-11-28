@@ -18,6 +18,9 @@
     if(ready&&initial)call('setTouchCalibration',initial.calibration||{})
     post({type:'xa-live2d-state',phase:d.phase,message:d.message})
   })
+  window.addEventListener('xa-live2d-capabilities',event=>{
+    if(ready&&Array.isArray(event.detail?.parameters))post({type:'xa-live2d-capabilities',parameters:event.detail.parameters})
+  })
   window.addEventListener('message',event=>{
     if(event.origin!==APP||event.source!==parent||!event.data||typeof event.data!=='object')return
     const d=event.data
