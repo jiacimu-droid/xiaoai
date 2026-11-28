@@ -24,7 +24,7 @@
     switch(d.type){
       case 'init':
         if(typeof d.model!=='string'||!d.model.startsWith(STAGE+'/private/models/'))return
-        initial=d;window.__luluStageModelUrl=d.model
+        initial=d;mode=['hand','kiss','pat'].includes(d.mode)?d.mode:'hand';window.__luluStageModelUrl=d.model
         window.__luluFramingMode=d.framing==='call'?'call':'full'
         call('setFramingMode',window.__luluFramingMode)
         viewport()
@@ -32,7 +32,7 @@
         break
       case 'update':call('update',d.state);break
       case 'event':call('onPlaybackEvent',d.event,0,d.sequence,'');break
-      case 'perform':call('perform',d.cue);break
+      case 'perform':call('perform',d.cue,!!d.immediate);break
       case 'motion':{const m=d.motion||d;call('motion',m.group,m.index,true,'manual');break}
       case 'expression':call('expression',d.name,true);break
       case 'mode':mode=String(d.mode||'hand');break
@@ -48,7 +48,7 @@
     const p=pos(e)
     if(zone){const result=call('calibrateTouch',p.x,p.y,zone);if(result?.calibration)post({type:'xa-live2d-calibration',calibration:result.calibration});return}
     pointer={id:e.pointerId,x:p.x,y:p.y,time:performance.now(),gesture:'tap'}
-    root.setPointerCapture?.(e.pointerId)
+    try{root.setPointerCapture?.(e.pointerId)}catch(_){}
     call('touch',p.x,p.y,'down',{phase:'start',mode,force:.55})
   })
   root.addEventListener('pointermove',e=>{
@@ -61,8 +61,13 @@
   root.addEventListener('pointerup',e=>{
     if(!pointer||pointer.id!==e.pointerId)return
     const p=pos(e),g=pointer.gesture==='tap'&&performance.now()-pointer.time>520?'hold':pointer.gesture
+    const durationMs=Math.round(performance.now()-pointer.time)
     pointer=null
-    call('touch',p.x,p.y,g,{phase:'complete',mode,force:.55})
+    const hit=call('touch',p.x,p.y,g,{phase:'complete',mode,force:.55})
+    if(hit?.hit===true&&typeof hit.region==='string')post({type:'xa-live2d-touch',region:hit.region,gesture:hit.gesture,mode,durationMs})
   })
-  root.addEventListener('pointercancel',()=>{pointer=null;call('touch',0,0,'cancel',{mode})})
+  const cancel=()=>{if(!pointer)return;pointer=null;call('touch',0,0,'cancel',{mode})}
+  root.addEventListener('pointercancel',cancel)
+  root.addEventListener('lostpointercapture',cancel)
+  window.addEventListener('blur',cancel)
 })()
