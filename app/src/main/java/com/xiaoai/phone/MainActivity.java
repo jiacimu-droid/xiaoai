@@ -41,6 +41,8 @@ public final class MainActivity extends Activity {
         super.onCreate(b);
         web=new WebView(this); setContentView(web);
         WebSettings s=web.getSettings(); s.setJavaScriptEnabled(true); s.setDomStorageEnabled(true); s.setDatabaseEnabled(true);
+        // Call TTS arrives asynchronously after synthesis; a prior tap is no longer a media gesture.
+        s.setMediaPlaybackRequiresUserGesture(false);
         s.setAllowFileAccess(false); s.setAllowContentAccess(true); s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         WebViewAssetLoader loader=new WebViewAssetLoader.Builder().addPathHandler("/assets/",new WebViewAssetLoader.AssetsPathHandler(this)).build();
         backupFiles=new BackupFiles(this);

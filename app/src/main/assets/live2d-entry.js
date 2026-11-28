@@ -590,61 +590,75 @@ function silentPart(job,part){
   });
 }
 function playPart(job,part,url){
-  if(!activeJob(job)){URL.revokeObjectURL(url);return Promise.resolve('cancelled');}
-  const audio=new Audio(url);callAudio=audio;
+  if(!activeJob(job)){URL.revokeObjectURL(url);return Promise.resolve({status:'cancelled'});}
+  let audio;
+  try{audio=new Audio(url);}catch(e){
+    URL.revokeObjectURL(url);return Promise.resolve({status:'error',reason:e?.name||'AudioInitError'});
+  }
+  callAudio=audio;
   if(part.choice)speechMotions.set(audio,part.choice);
   return new Promise(resolve=>{
-    let done=false;
-    const finish=result=>{
-      if(done)return;done=true;job.cancelWait=null;
+    let done=false,started=false,timer=null;
+    const finish=(status,reason)=>{
+      if(done)return;done=true;clearTimeout(timer);job.cancelWait=null;
       if(callAudio===audio)callAudio=null;
-      if(result!=='ended')try{audio.pause();}catch(_){}
-      URL.revokeObjectURL(url);resolve(result);
+      if(status!=='ended')try{audio.pause();}catch(_){}
+      URL.revokeObjectURL(url);resolve({status,reason,started});
     };
     job.cancelWait=()=>finish('cancelled');
     audio.addEventListener('playing',()=>{
       if(!activeJob(job))return finish('cancelled');
+      started=true;clearTimeout(timer);
       segmentCaption(job,part.text);
       const p=panel;
       if(p?.kind==='call'&&p.session===job.session&&p.ready)watchMedia(p,audio);
     });
     audio.addEventListener('ended',()=>finish('ended'),{once:true});
-    audio.addEventListener('error',()=>finish('error'),{once:true});
-    audio.addEventListener('pause',()=>{if(!audio.ended)finish('cancelled');},{once:true});
-    try{Promise.resolve(audio.play()).catch(()=>finish('error'));}catch(_){finish('error');}
+    audio.addEventListener('error',()=>finish('error','MediaError '+(audio.error?.code||'unknown')),{once:true});
+    audio.addEventListener('pause',()=>{if(!audio.ended)finish(activeJob(job)?'error':'cancelled','UnexpectedPause');},{once:true});
+    timer=setTimeout(()=>{if(!started)finish('error','PlaybackStartTimeout');},15000);
+    try{Promise.resolve(audio.play()).catch(e=>finish('error',e?.name||'PlaybackRejected'));}catch(e){finish('error',e?.name||'PlaybackRejected');}
   });
 }
 async function performSpeechPlan(text,plan){
   callStopAudio();
   const job={session:callLog,request:++callSpeechRequest,cancelWait:null};performanceJob=job;
   let config=null;try{config=DB.get('ttsConfig',null);}catch(_){}
-  let silent=!callTtsOn||!config?.key||!config?.group||typeof minimaxSpeak!=='function';
-  let failure='';
+  const enabled=!!callTtsOn&&!!config?.key&&!!config?.group&&typeof minimaxSpeak==='function';
+  let failed=0,lastFailure='';
   try{
     for(const part of plan.parts){
       if(!activeJob(job))return;
-      if(!silent){
+      if(enabled){
         callTip('正在用 MiniMax 合成語音…');
         let url;
-        try{url=await minimaxSpeak(part.text,config);}catch(e){
-          if(!activeJob(job))return;silent=true;failure='語音失敗：'+friendly(e);
+        try{
+          url=await minimaxSpeak(part.text,config);
+          if(typeof url!=='string'||!url.trim())throw Error('EmptyAudioSource');
+        }catch(e){
+          if(!activeJob(job))return;
+          url=null;lastFailure='語音合成失敗：'+friendly(e);
         }
         if(url){
           if(!activeJob(job)){URL.revokeObjectURL(url);return;}
           callTipClear();
           const result=await playPart(job,part,url);
-          if(!activeJob(job)||result==='cancelled')return;
-          if(result==='ended')continue;
-          silent=true;failure='語音放不出來，先看字幕';
+          if(!activeJob(job)||result.status==='cancelled')return;
+          if(result.status==='ended')continue;
+          lastFailure='語音播放失敗：'+(result.reason||'UnknownPlaybackError');
+          console.warn('Live2D segment playback failed',result.reason||'UnknownPlaybackError');
         }
+        failed++;
+        // A failed segment must not disable TTS for all subsequent dialogue.
+        callTip(lastFailure+'，繼續下一段');
       }
       if(!activeJob(job))return;
       if(!await silentPart(job,part))return;
     }
     if(activeJob(job)){
       callTipClear();
-      if(failure)callTip(failure);
-      else if(silent)callTip('本輪僅字幕及分段表演');
+      if(failed)callTip(failed+' 段語音未完整播放：'+lastFailure);
+      else if(!enabled)callTip(callTtsOn?'尚未完成 MiniMax 語音設定，本輪僅字幕':'已關閉語音，本輪僅字幕');
     }
   }finally{
     if(performanceJob===job){performanceJob=null;segmentCaption(job,'');}

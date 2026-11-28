@@ -38,3 +38,31 @@ test('only actual audio completion advances to the next segment; cancellation re
   assert.deepEqual(spoken,['first','second']);assert.equal(api.choice(audioList[1]).id,2);assert.equal(panel.partCaption.textContent,'second');
   api.stop();await task;assert.equal(api.active(),false);assert.equal(panel.partCaption.hidden,true);assert.equal(revoked.length,2);
 });
+
+
+test('a rejected playback reports its cause and continues synthesizing later segments',async()=>{
+  const log=[],spoken=[],tips=[],revoked=[],audioList=[];
+  const panel={kind:'call',session:log,ready:true,partCaption:{}};
+  class AudioMock{
+    constructor(url){this.src=url;this.listeners={};this.ended=false;audioList.push(this);}
+    addEventListener(k,fn){(this.listeners[k]??=[]).push(fn);}
+    emit(k){for(const fn of this.listeners[k]||[])fn();}
+    play(){if(this.src==='blob:first')return Promise.reject(Object.assign(new Error('blocked'),{name:'NotAllowedError'}));this.emit('playing');return Promise.resolve();}
+    pause(){this.emit('pause');}
+  }
+  const setup=`let performanceJob=null,callAudio=null,callSpeechRequest=0,callPhase='connected',callTtsOn=true;const speechMotions=new WeakMap();function callTip(x){tips.push(x);}function callTipClear(){}function callStopAudio(){cancelPerformance();callSpeechRequest++;}`;
+  const timers=new Map();let next=0;
+  const api=new Function('callLog','panel','Audio','URL','DB','minimaxSpeak','watchMedia','verifiedCue','send','friendly','tips','setTimeout','clearTimeout','console',setup+between('function activeJob(job)','window.XaLive2D={openPreview')+';return {performSpeechPlan};')(log,panel,AudioMock,{revokeObjectURL:u=>revoked.push(u)},{get:()=>({key:'k',group:'g'})},async text=>{spoken.push(text);return 'blob:'+text;},()=>{},()=>null,()=>{},String,tips,(fn,ms)=>{const id=++next;timers.set(id,{fn,ms});return id;},id=>timers.delete(id),{warn(){}});
+  const flush=async()=>{for(let i=0;i<20;i++)await Promise.resolve();};
+  const task=api.performSpeechPlan('first second',{parts:[{text:'first'},{text:'second'}]});
+  await flush();
+  assert.deepEqual(spoken,['first']);
+  assert.ok(tips.some(t=>t.includes('NotAllowedError')));
+  const captionTimer=[...timers.values()].find(t=>t.ms<15000);
+  assert.ok(captionTimer);captionTimer.fn();await flush();
+  assert.deepEqual(spoken,['first','second']);
+  assert.equal(panel.partCaption.textContent,'second');
+  audioList[1].ended=true;audioList[1].emit('ended');await task;
+  assert.deepEqual(revoked,['blob:first','blob:second']);
+  assert.ok(tips.some(t=>t.includes('1 段語音未完整播放')));
+});
