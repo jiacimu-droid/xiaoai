@@ -125,7 +125,7 @@ function callReady(){
 }
 function speaking(){
   const last=callLog[callLog.length-1];
-  return callBusy||!!callAudio||(last?.role==='sys'&&last.text==='正在用 MiniMax 合成語音…');
+  return callBusy||!!callAudio||!!window.XaLive2D?.isPerforming()||(last?.role==='sys'&&last.text==='正在用 MiniMax 合成語音…');
 }
 async function listenCall(){
   const job={session:callLog,cancelled:false};callCapture=job;
