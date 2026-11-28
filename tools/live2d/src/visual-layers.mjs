@@ -1,0 +1,337 @@
+import { createPoseSpring } from './pose-spring.mjs'
+
+/**
+ * AIRI-inspired final-stage Cubism actuator. Only the character selects
+ * gestures. The renderer owns camera contact, stable resting posture and
+ * small physical reflexes; never manufactures emotional intentions.
+ *
+ * Pose inputs run after motions/focus/breathing but BEFORE physics.
+ * Secondary output gating runs after physics, before drawable model.update.
+ */
+export const FACE_BINDINGS = Object.freeze({
+  gazeX: ['ParamEyeBallX'], gazeY: ['ParamEyeBallY'],
+  smile: ['ParamMouthForm'],
+  eyeSmile: ['ParamEyeLSmile', 'ParamEyeRSmile'],
+  eyeOpen: ['ParamEyeLOpen', 'ParamEyeROpen'],
+  browX: ['ParamBrowLX', 'ParamBrowRX'],
+  // One writer per eyebrow. The legacy bilateral 'browY' face cue is
+  // interpreted as a fallback for each side, never as a second write pass.
+  // Independent brow actuators are present in the supplied CDI3 rig.
+  browLeftY: ['ParamBrowLY'], browRightY: ['ParamBrowRY'],
+  browAngle: ['ParamBrowLAngle', 'ParamBrowRAngle'],
+  browForm: ['ParamBrowLForm', 'ParamBrowRForm'],
+  squint: ['ParamEyeLSquint', 'ParamEyeRSquint'],
+  cheekPuff: ['ParamCheekPuff'], pout: ['ParamMouthFunnel'],
+  // PhysicsSetting26 input; Cubism physics owns MouthX3/X4/X5 outputs.
+  mouthX: ['ParamMouthX'],
+})
+export const BODY_BINDINGS = Object.freeze({
+  yaw: 'ParamBodyAngleX', pitch: 'ParamBodyAngleY', roll: 'ParamBodyAngleZ',
+})
+// The names below are inspected against the *actual* Cubism Core parameter
+// IDs. A different rig lacking them simply skips them.
+const SECONDARY_HEAD = ['ParamAngleX2', 'ParamAngleY2', 'ParamAngleZ2']
+const SECONDARY_BODY = [
+  'body_gensui_x', 'body_gensui_y', 'body_gensui_y2',
+  'body_gensui_y3', 'body_gensui_z',
+]
+const MAIN_HEAD = [
+  ['ParamAngleX', 'yaw'], ['ParamAngleY', 'pitch'], ['ParamAngleZ', 'roll'],
+]
+const clamp01 = v => Math.min(1, Math.max(0, v))
+// An authored star/closed-eye exp3 owns its eye channels until it fades out.
+// Do not let a previous touch's smoothing write over the imported expression.
+const AUTHORED_EYE_CHANNELS = new Set(['gazeX', 'gazeY', 'eyeOpen', 'eyeSmile', 'squint'])
+
+export function createVisualLayerRuntime({ has, read, write }) {
+  // Enter a selected pose promptly, relax out of it without a fast snap.
+  const headSpring = createPoseSpring(['yaw', 'pitch', 'roll'], 95, 1.06, 25)
+  const bodySpring = createPoseSpring(['yaw', 'pitch', 'roll'], 72, 1.1, 23)
+  const touchSpring = createPoseSpring(['yaw', 'pitch', 'roll'], 135, 1.02, 32)
+  const touchBodySpring = createPoseSpring(['yaw', 'pitch', 'roll'], 105, 1.08, 26)
+  const smoothedFace = Object.create(null)
+  let secondaryHeadMix = 0
+  let secondaryBodyMix = 0
+  let headHandoff = 0
+  let bodyHandoff = 0
+  let touchDominance = 0
+  let rig = null
+  const validId = id => typeof id === 'string' && id.length > 0 && id.length <= 128
+  const idList = value => Array.isArray(value)
+    ? [...new Set(value.filter(validId))].slice(0, 64) : []
+  const axes = (value, fallback) => value && typeof value === 'object'
+    ? Object.fromEntries(['yaw', 'pitch', 'roll']
+      .filter(axis => validId(value[axis])).map(axis => [axis, value[axis]]))
+    : fallback
+  function setRigProfile(value) {
+    if (!value) { rig = null; reset(); return }
+    const head = axes(value.head, Object.fromEntries(MAIN_HEAD.map(([id, axis]) => [axis, id])))
+    const body = axes(value.body, BODY_BINDINGS)
+    const face = value.face && typeof value.face === 'object'
+      ? Object.fromEntries(Object.keys(FACE_BINDINGS).map(key => [key, idList(value.face[key])])
+        .filter(([, ids]) => ids.length)) : FACE_BINDINGS
+    const brow = value.speechBrow
+    const bounded = (v, lo, hi, fallback) => Number.isFinite(v) && v >= lo && v <= hi ? v : fallback
+    rig = {
+      head: Object.entries(head).map(([axis, id]) => [id, axis]), body, face,
+      secondaryHead: idList(value.secondaryHead),
+      secondaryBody: idList(value.secondaryBody),
+      protectedOutputs: new Set(idList(value.protectedPhysicsOutputs)),
+      speechBrow: brow && typeof brow === 'object' ? {
+        threshold: bounded(brow.threshold, 0, 1, .55),
+        gain: bounded(brow.gain, 0, 2, .36),
+        max: bounded(brow.max, 0, 1, .16),
+        frequency: bounded(brow.frequency, 0, 20, 2.1),
+        rightRatio: bounded(brow.rightRatio, 0, 1, .35),
+      } : null,
+    }
+    reset()
+  }
+
+  function reset() {
+    headSpring.reset()
+    bodySpring.reset()
+    touchSpring.reset()
+    touchBodySpring.reset()
+    secondaryHeadMix = 0
+    secondaryBodyMix = 0
+    headHandoff = 0
+    bodyHandoff = 0
+    touchDominance = 0
+    for (const key of Object.keys(smoothedFace)) delete smoothedFace[key]
+  }
+
+  function update(core, { deltaMs, head, body, face, touchReflex = null, physical = null, listening = false, thinking = false, speaking, authoredMotion = false, touchMotionActive = false, expressionActive = false, eyeShapeLocked = false, voiceLevel = null, seconds, wolf = false, deferPhysicsOutputs = false }) {
+    if (!core) return
+    const mainHead = rig?.head ?? MAIN_HEAD
+    const bodyBindings = rig?.body ?? BODY_BINDINGS
+    const faceBindings = rig?.face ?? FACE_BINDINGS
+    const brow = rig ? rig.speechBrow : wolf
+      ? { threshold: .55, gain: .36, max: .16, frequency: 2.1, rightRatio: .35 } : null
+    // Breathing alone looks frozen in many rigs. A few sub-degree slow
+    // movements keep the body alive without ever pulling eyes off camera.
+    // Touch and the character's own explicit pose take precedence.
+    const speechEnergy = speaking ? (.4 + .6 * clamp01(
+      Number.isFinite(voiceLevel) ? voiceLevel : .45)) : 0
+    // The call already supplies microphone-listening state, but until now
+    // nothing consumed it: the avatar stayed in the same idle pose while the
+    // user spoke. This is a restrained local attention posture, NOT an
+    // inference about the user's words, mood or the character's intentions.
+    // An authored Motion3, expression, touch or explicit pose always wins.
+    const attending = listening && !speaking && !authoredMotion &&
+      !touchReflex && !head && !body && !face && !expressionActive
+    // The call session knows when its model is actually generating a reply.
+    // Show a small, reversible thinking posture only in that factual phase;
+    // never infer feelings from microphone level or overwrite authored acts.
+    const pondering = thinking && !listening && !speaking && !authoredMotion &&
+      !touchReflex && !head && !body && !face && !expressionActive
+    const idleHead = !head && !touchReflex ? {
+      // Head Z is a chosen neck tilt, NOT a permanent sine-wave wobble.
+      // Keep the chin stable while ordinary speech animates the mouth.
+      yaw: pondering ? -1.4 : 0,
+      pitch: .18 * Math.sin(seconds * .23 + .8) +
+        speechEnergy * .18 * Math.sin(seconds * .47) +
+        (attending ? 1.2 + .18 * Math.sin(seconds * .65) : 0) +
+        (pondering ? -.85 : 0),
+      roll: pondering ? .3 : 0,
+    } : null
+    const idleBody = !body && !touchReflex ? {
+      yaw: .06 * Math.sin(seconds * .19 + .5) + (pondering ? -.25 : 0),
+      pitch: .23 * Math.sin(seconds * .23) +
+        speechEnergy * .18 * Math.sin(seconds * .47) +
+        (attending ? .32 : 0) + (pondering ? -.18 : 0),
+      roll: .09 * Math.sin(seconds * .17 + .9),
+    } : null
+    // Authored motion files can contain head/torso movement as well as arms.
+    // Sample their real pose instead of overwriting it with our resting pose.
+    const scriptedTouch = authoredMotion && touchMotionActive
+    // An authored tactile clip is the single owner of the main joints.
+    // Its real timeline is preserved; only small force/direction offsets are
+    // composed onto that curve, rather than replacing it with a static pose.
+    const jointTouch = scriptedTouch ? null : touchReflex
+    const authoredHead = authoredMotion ? Object.fromEntries(mainHead.map(([id, axis]) =>
+      [axis, read(core, id) ?? 0])) : null
+    const authoredBody = authoredMotion ? Object.fromEntries(Object.entries(bodyBindings).map(([axis, id]) =>
+      [axis, read(core, id) ?? 0])) : null
+    const headPose = headSpring.step(head || authoredHead || idleHead, deltaMs,
+      !head && !authoredMotion)
+    const bodyPose = bodySpring.step(body || authoredBody || idleBody, deltaMs,
+      !body && !authoredMotion)
+    // Soft stroking gets a gentle spring; a palm hit needs a sharp visible
+    // attack at the neck, then a long recovery. A single slow spring for both
+    // formerly swallowed the entire 200ms impact peak.
+    const reflexPose = touchSpring.step(jointTouch, deltaMs, !jointTouch,
+      jointTouch?.impactMotion ? 780 : null)
+    const bodyReflex = touchBodySpring.step(jointTouch?.body, deltaMs, !jointTouch,
+      jointTouch?.impactMotion ? 230 : null)
+    // A motion and a physical reflex are not two independent additive neck
+    // rotations. Otherwise a 25-degree turn + 30-degree slap gets clamped at
+    // the rig limit and looks like a frozen or jerking head. Real impact
+    // immediately owns the posture; soft touches temporarily take most of
+    // that channel. Yield to the selected motion gradually after release.
+    const touchGoal = jointTouch?.impactMotion ? 1 : jointTouch ? .72 : 0
+    const touchTimeConstant = touchGoal > touchDominance ? 36 : 290
+    const touchBlend = 1 - Math.exp(-Math.max(0, deltaMs) / touchTimeConstant)
+    touchDominance += (touchGoal - touchDominance) * touchBlend
+    if (!touchReflex && touchDominance < .001) touchDominance = 0
+    // The original Motion3 still updates underneath a short touch or voice cue.
+    // Don't hand it control in one frame when that override expires.
+    if (authoredMotion) {
+      headHandoff = head || jointTouch ? 1 : Math.max(0, headHandoff - deltaMs / 1050)
+      bodyHandoff = body || jointTouch ? 1 : Math.max(0, bodyHandoff - deltaMs / 1050)
+    } else {
+      headHandoff = 0
+      bodyHandoff = 0
+    }
+    const eased = t => t * t * (3 - 2 * t)
+    const headMix = !authoredMotion || head || jointTouch ? 1 : eased(headHandoff)
+    const bodyMix = !authoredMotion || body || jointTouch ? 1 : eased(bodyHandoff)
+    // Lower than a full second motion: enough for touch strength to be felt
+    // while the matched Motion3 handles its own lead/lag and recovery.
+    const detailGain = touchReflex?.impactMotion ? .19 : .13
+    for (const [id, axis] of mainHead) {
+      if (!has(core, id)) continue
+      if (scriptedTouch) {
+        if (touchReflex) write(core, id, (authoredHead?.[axis] ?? 0) +
+          (Number(touchReflex[axis]) || 0) * detailGain)
+        continue
+      }
+      if (authoredMotion && !head && !jointTouch && headHandoff === 0) continue
+      const desired = headPose[axis] * (1 - touchDominance) + (reflexPose[axis] || 0)
+      write(core, id, (authoredHead?.[axis] ?? 0) * (1 - headMix) + desired * headMix)
+    }
+    for (const [axis, id] of Object.entries(bodyBindings)) {
+      if (!has(core, id)) continue
+      if (scriptedTouch) {
+        if (touchReflex) write(core, id, (authoredBody?.[axis] ?? 0) +
+          (Number(touchReflex.body?.[axis]) || 0) * detailGain)
+        continue
+      }
+      if (authoredMotion && !body && !jointTouch && bodyHandoff === 0) continue
+      const desired = bodyPose[axis] * (1 - touchDominance) + bodyReflex[axis]
+      write(core, id, (authoredBody?.[axis] ?? 0) * (1 - bodyMix) + desired * bodyMix)
+    }
+
+    // Physics follow-through on a neutral head/torso causes the user's
+    // unwanted wandering. Suppress just those bones, not ears or hair.
+    // Follow-through fades gently instead of disappearing as soon as the
+    // pointer is released. Rise stays fast; return is deliberately slower.
+    const headActive = !!(head || authoredMotion || touchReflex)
+    const bodyActive = !!(body || authoredMotion || touchReflex)
+    const headStep = 1 - Math.exp(-Math.max(0, deltaMs) / (headActive ? 120 : 650))
+    const bodyStep = 1 - Math.exp(-Math.max(0, deltaMs) / (bodyActive ? 120 : 700))
+    secondaryHeadMix += ((headActive ? 1 : 0) - secondaryHeadMix) * headStep
+    secondaryBodyMix += ((bodyActive ? 1 : 0) - secondaryBodyMix) * bodyStep
+    if (!headActive && secondaryHeadMix < .008) secondaryHeadMix = 0
+    if (!bodyActive && secondaryBodyMix < .008) secondaryBodyMix = 0
+    if (!deferPhysicsOutputs) finishPhysics(core)
+
+    for (const [key, ids] of Object.entries(faceBindings)) {
+      // The exp3 was applied earlier in the Cubism frame. Even a pending
+      // release of a local blink/gaze cue must not flatten its special eyes.
+      if (eyeShapeLocked && AUTHORED_EYE_CHANNELS.has(key)) {
+        delete smoothedFace[key]
+        continue
+      }
+      if (ids.some(id => !has(core, id))) continue
+      // Speech amplitude articulates a selected smile; speech alone never
+      // assigns a happy face to a serious, sad or otherwise neutral reply.
+      // Only measured PCM emphasis gets a restrained one-brow lift.
+      // Never infer "happy" from sound, override chosen expressions, or
+      // impose one personality's mannerisms on every imported model.
+      const emphasis = brow && speaking && Number.isFinite(voiceLevel) &&
+        !touchReflex && !authoredMotion && !expressionActive &&
+        face?.browY == null && face?.browLeftY == null &&
+        face?.browRightY == null && voiceLevel > brow.threshold
+        ? Math.min(brow.max, (voiceLevel - brow.threshold) * brow.gain) *
+          Math.max(0, Math.sin(seconds * brow.frequency)) : 0
+      const speechBrow = key === 'browLeftY' ? emphasis :
+        key === 'browRightY' ? emphasis * (brow?.rightRatio ?? 0) : null
+      const pairedBrow = key === 'browLeftY' || key === 'browRightY'
+      const bilateralBrow = pairedBrow
+        ? touchReflex?.face?.browY ?? face?.browY : null
+      // Briefly glance away while the actual model request is pending.
+      // Real exp3 eyes, explicit gaze, touch and authored Motion3 win.
+      const thinkingGaze = pondering && !eyeShapeLocked
+        ? key === 'gazeX' ? -.14 : key === 'gazeY' ? .12 : null
+        : null
+      const requested = touchReflex?.face?.[key] ?? face?.[key] ??
+        bilateralBrow ?? thinkingGaze ??
+        (speechBrow != null && speechBrow > .008 ? speechBrow : null)
+      const eyeContact = key === 'gazeX' || key === 'gazeY'
+      if (authoredMotion && requested == null) {
+        delete smoothedFace[key]
+        continue
+      }
+      let state = smoothedFace[key]
+      if (!eyeContact && requested == null && !state) continue
+      const resting = key === 'eyeOpen' ? 1 : 0
+      if (!state) {
+        const bases = ids.map(id => read(core, id) ?? resting)
+        state = { values: [...bases], bases, release: null }
+        smoothedFace[key] = state
+      }
+      // Cubism authored motions and expressions ran before this final layer.
+      // After our temporary cue, restore the actual imported model's pose.
+      if (requested == null && !eyeContact && !state.release) {
+        state.release = ids.map((id, i) => {
+          const authored = read(core, id)
+          return Number.isFinite(authored) &&
+            Math.abs(authored - state.values[i]) > .06
+            ? authored : state.bases[i]
+        })
+      }
+      if (requested != null) state.release = null
+      const energy = Number.isFinite(voiceLevel) ? clamp01(voiceLevel) : 1
+      const voiced = speaking && requested != null &&
+        (key === 'smile' || key === 'eyeSmile')
+      // Small PCM-led articulation; no arbitrary sine-wave facial twitch.
+      const target = voiced ? requested * (.94 + .06 * energy) : requested
+      const blend = 1 - Math.exp(-Math.max(0, deltaMs) * .012)
+      let released = requested == null && !eyeContact
+      ids.forEach((id, i) => {
+        // Single-eye contact closes just that eyelid. Keep a single owner per
+        // parameter so the bilateral release cannot flatten an authored wink.
+        const sideKey = key === 'eyeOpen' ? (i === 0 ? 'eyeLeftOpen' : 'eyeRightOpen') : null
+        const sideTarget = sideKey ? touchReflex?.face?.[sideKey] ?? face?.[sideKey] : null
+        const goal = sideTarget ?? target ?? (eyeContact ? 0 : state.release[i])
+        state.values[i] += (goal - state.values[i]) * blend
+        if (Math.abs(state.values[i] - goal) > .015) released = false
+        else if (requested == null) state.values[i] = goal
+        write(core, id, state.values[i])
+      })
+      if (released) delete smoothedFace[key]
+    }
+    // These optional physics channels exist in the supplied wolf CDI3.
+    // An absent channel is skipped; appearance toggles are never touched.
+    for (const [id, value] of Object.entries(touchReflex?.parameters || {})) {
+      if (!rig?.protectedOutputs.has(id) && has(core, id) && Number.isFinite(value)) write(core, id, value)
+    }
+    // Unlike head yaw oscillations, the dedicated breathing rig produces
+    // subtle life without destroying eye contact. Keep it on its own channel.
+    if (has(core, 'ParamBreath')) {
+      const stamina = Number.isFinite(physical?.energy)
+        ? clamp01(physical.energy / 100) : .78
+      const fatigue = Number.isFinite(physical?.sleepPressure)
+        ? clamp01(physical.sleepPressure / 100) : .22
+      // A mild physical tempo, not synthetic emotions or a forced gesture.
+      const rate = 1.13 + .34 * stamina - .22 * fatigue
+      write(core, 'ParamBreath', .5 + .14 * Math.sin(seconds * rate))
+    }
+  }
+
+  function finishPhysics(core) {
+    // Secondary axes are authored physics outputs, not a per-frame additive
+    // accumulator. Gate them on during touch; never add our own previous
+    // result back each frame or the angles would grow without bound.
+    for (const id of rig?.secondaryHead ?? SECONDARY_HEAD) {
+      if (!rig?.protectedOutputs.has(id) && has(core, id)) write(core, id, (read(core, id) ?? 0) * secondaryHeadMix)
+    }
+    for (const id of rig?.secondaryBody ?? SECONDARY_BODY) {
+      if (!rig?.protectedOutputs.has(id) && has(core, id)) write(core, id, (read(core, id) ?? 0) * secondaryBodyMix)
+    }
+
+  }
+
+  return { update, finishPhysics, reset, setRigProfile }
+}

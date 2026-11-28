@@ -1,0 +1,88 @@
+import { touchExpressionWeight } from './touch-reflex.mjs'
+
+/** Fractional authored Add channels, with independent release ownership.
+ * Automatic touch must not turn a faint blush into a full-strength exp3.
+ * Explicit character/manual expressions still use the original manager.
+ */
+export function createTouchExpressionLayer({ has, read, write }) {
+  let channels = []
+  let startedAt = 0
+  let until = 0
+  let activeName = null
+
+  function clear(core) {
+    for (const channel of channels) {
+      if (has(core, channel.id)) write(core, channel.id, channel.base)
+    }
+    channels = []
+    activeName = null
+  }
+
+  function start(core, name, metadata, extra, state, now, delayMs = 0, durationMs = 2100) {
+    clear(core)
+    const parameters = metadata?.[name]?.Parameters
+    if (!Array.isArray(parameters)) return false
+    const weight = touchExpressionWeight(name, state)
+    // Many imported exp3 presets bundle a cute blush with a SINGLE eye lid
+    // closure (a wink). Automatic touch must not close the untouched eye.
+    // Preserve the blush/tear/accessory-independent additive channels; a
+    // deliberate manually selected expression is not handled by this layer.
+    const eyePairs = [
+      ['ParamEyeLOpen', 'ParamEyeROpen'],
+      ['ParamEyeLSmile', 'ParamEyeRSmile'],
+      ['ParamEyeLSquint', 'ParamEyeRSquint'],
+    ]
+    // Even a two-channel exp3 can encode a wink with unequal eye values.
+    // Only automatic touch uses these symmetric values; manually selected
+    // authored expressions retain their original asymmetric animation.
+    const unpairedEyeIds = new Set()
+    const pairedEyeValues = new Map()
+    for (const [left, right] of eyePairs) {
+      const l = parameters.find(p => p?.Id === left && p.Blend === 'Add' &&
+        Number.isFinite(p.Value))
+      const r = parameters.find(p => p?.Id === right && p.Blend === 'Add' &&
+        Number.isFinite(p.Value))
+      if (l && r) {
+        const common = (l.Value + r.Value) / 2
+        pairedEyeValues.set(left, common)
+        pairedEyeValues.set(right, common)
+      } else {
+        unpairedEyeIds.add(left)
+        unpairedEyeIds.add(right)
+      }
+    }
+    for (const p of parameters) {
+      if (p?.Blend !== 'Add' || !Number.isFinite(p.Value) ||
+          unpairedEyeIds.has(p.Id) || !has(core, p.Id)) continue
+      const base = read(core, p.Id)
+      const value = pairedEyeValues.get(p.Id) ?? p.Value
+      if (Number.isFinite(base)) channels.push({ id: p.Id, base,
+        expression: name, value, delta: value * weight })
+    }
+    if (extra && has(core, extra.id) && !channels.some(c => c.id === extra.id)) {
+      const base = read(core, extra.id)
+      if (Number.isFinite(base)) channels.push({ id: extra.id, base,
+        expression: extra.name, value: extra.value / touchExpressionWeight(extra.name, state),
+        delta: extra.value })
+    }
+    if (!channels.length) return false
+    activeName = name
+    startedAt = now + delayMs
+    until = startedAt + durationMs
+    return true
+  }
+  function retarget(state, now, durationMs = 2200) {
+    if (!activeName) return
+    for (const c of channels) c.delta = c.value * touchExpressionWeight(c.expression, state)
+    until = now + durationMs
+  }
+
+  function update(core, now) {
+    if (!activeName) return null
+    if (now >= until) { clear(core); return null }
+    const fade = Math.max(0, Math.min(1, (now - startedAt) / 160, (until - now) / 650))
+    for (const c of channels) write(core, c.id, c.base + c.delta * fade)
+    return now >= startedAt ? activeName : null
+  }
+  return { start, update, retarget, clear }
+}

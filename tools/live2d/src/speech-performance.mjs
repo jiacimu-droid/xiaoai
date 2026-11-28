@@ -1,0 +1,117 @@
+/**
+ * Audio-clock-driven visual score, inspired by AIRI's layered motion manager.
+ * One planned score belongs to one voice turn. No timers, paid API calls,
+ * second cognition loop or fabricated movements: the render callback merely
+ * samples the plan at a monotonic instant.
+ */
+export function createPerformanceRuntime({ now = () => performance.now() } = {}) {
+  let pending = null
+  let current = null
+  let speaking = false
+  let positionMs = null
+  function audioPosition(elapsedMs) {
+    if (!speaking || !Number.isFinite(elapsedMs) || elapsedMs < 0 ||
+        (positionMs !== null && elapsedMs < positionMs)) return false
+    positionMs = elapsedMs
+    return true
+  }
+
+  function schedule(beats, immediate = false) {
+    const allowed = Array.isArray(beats) ? beats.filter(beat =>
+      beat && Number.isFinite(beat.atMs) && beat.atMs >= 0 &&
+      beat.atMs <= 30000 &&
+      (beat.motion || beat.expression || beat.head || beat.body || beat.face))
+      .slice(0, 16).sort((a, b) => a.atMs - b.atMs) : []
+    if (!allowed.length) return false
+    // A later decision supersedes every unplayed beat of the former decision.
+    current = null
+    pending = null
+    if (speaking || immediate) {
+      current = { beats: allowed, index: 0, startedAt: now(), immediate }
+    } else {
+      pending = { beats: allowed, queuedAt: now() }
+    }
+    return true
+  }
+
+  // Model-authored cues can target a spoken fragment rather than guessing
+  // absolute TTS milliseconds. The Android caller supplies actual segment
+  // start offsets once playback is prepared; no extra model request needed.
+  function scheduleSegments(cues, segments) {
+    if (!Array.isArray(cues) || !Array.isArray(segments)) return false
+    const beats = cues.flatMap(cue => {
+      if (!cue || !Number.isInteger(cue.segmentIndex)) return []
+      const segment = segments[cue.segmentIndex]
+      if (!segment || !Number.isFinite(segment.startMs) || segment.startMs < 0) return []
+      const offset = cue.offsetMs == null ? 0 : cue.offsetMs
+      if (!Number.isFinite(offset) || offset < 0) return []
+      const atMs = segment.startMs + offset
+      if (Number.isFinite(segment.durationMs) && offset > segment.durationMs) return []
+      return [{ ...cue, atMs }]
+    })
+    return schedule(beats)
+  }
+
+  function startSpeech() {
+    if (speaking) return // duplicate PCM/status callback
+    speaking = true
+    positionMs = null
+    if (pending) {
+      // The call can spend longer than 20 seconds synthesizing TTS. A selected
+      // score belongs to its real utterance lifecycle, not a wall-clock lease:
+      // a newer score, interruption, model replacement or hidden stage clears it.
+      current = { beats: pending.beats, index: 0, startedAt: now(), immediate: false }
+      pending = null
+    }
+  }
+
+  function stopSpeech() {
+    speaking = false
+    positionMs = null
+    clearScore()
+  }
+
+  function clearScore() {
+    current = null
+    pending = null
+  }
+
+  /** Render callback calls this after normal motions, before face sampling. */
+  function tick(onBeat) {
+    const time = now()
+    if (!current || (!current.immediate && !speaking)) return 0
+    // Monotonic wall elapsed, independent of Pixi/JPEG FPS. If a frame takes
+    // 200 ms, due gestures are processed once, in chronological order.
+    // Once an actual playback position is available, an underrun/paused
+    // AudioTrack cannot keep advancing the score by wall-clock time.
+    const elapsed = positionMs ?? Math.max(0, time - current.startedAt)
+    let fired = 0
+    while (current && current.index < current.beats.length &&
+        current.beats[current.index].atMs <= elapsed) {
+      const beat = current.beats[current.index++]
+      // Dropped render frames cannot replay gestures that have already ended
+      // on the actual speech clock. Nor may a late beat receive its original
+      // full lease, which would leave a pose hanging after the spoken phrase.
+      const lateMs = Math.max(0, elapsed - beat.atMs)
+      if (Number.isFinite(beat.durationMs) && beat.durationMs > 0 &&
+          lateMs >= beat.durationMs) continue
+      onBeat(beat, lateMs)
+      fired++
+    }
+    if (current && current.index >= current.beats.length) current = null
+    return fired
+  }
+
+  function reset() {
+    speaking = false
+    positionMs = null
+    current = null
+    pending = null
+  }
+  function state() {
+    return { speaking, queued: !!pending,
+      remaining: current ? current.beats.length - current.index : 0 }
+  }
+
+  return { schedule, scheduleSegments, startSpeech, stopSpeech, audioPosition, clearScore, tick, reset, state }
+}
