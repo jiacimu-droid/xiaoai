@@ -17,7 +17,12 @@ test('speech plan keeps each segment text and its own verified motion and expres
   assert.equal(result.motion.parts[1].choice.face.gazeX,.4);
   assert.equal(result.motion.parts[2].choice,null);
   const invalid=visual.parse(encode([{id:'s1',text:'甲'},{id:'s1',text:'乙'}]));
-  assert.equal(invalid.reply,'甲 乙');assert.equal(invalid.motion,null);
+  assert.equal(invalid.reply,'甲 乙');assert.equal(invalid.motion.parts.length,2);assert.notEqual(invalid.motion.parts[0].id,invalid.motion.parts[1].id);
+  const wrapped=visual.parse('好的！\n```json\n'+encode([{text:'親親',motion:'1',expression:'smile'}])+'\n```');
+  assert.equal(wrapped.reply,'親親');assert.equal(wrapped.motion.parts[0].choice.motion.index,1);assert.equal(wrapped.motion.parts[0].choice.expression,'smile');
+  const raw=visual.parse(JSON.stringify({speech:[{text:'過來呀',motion:'wave'}]}));assert.equal(raw.motion.parts[0].choice.motion.index,1);
+  const truncated=visual.parse('[L2S]{"speech":[{"text":"親一下"},');assert.equal(truncated.reply,'親一下');assert.equal(truncated.repair,true);
+  const malformed=visual.parse('[L2S]{"speech":[{"motion":0},');assert.equal(malformed.reply,'');assert.equal(malformed.repair,true);
 });
 test('only actual audio completion advances to the next segment; cancellation releases resources',async()=>{
   const log=[],parts=[{id:'a',text:'first',choice:{id:1}},{id:'b',text:'second',choice:{id:2}}];

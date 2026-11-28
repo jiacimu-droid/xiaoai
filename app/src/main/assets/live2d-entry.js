@@ -421,10 +421,11 @@ function callMotionOptions(){
   const headKeys=supportedChannels(visible?p:null,headChannels);
   const bodyKeys=supportedChannels(visible?p:null,bodyChannels);
   return {
-    prompt:observed+(visible?'\n【Live2D 視訊表演】請將對方本輪話語及真實觸摸一起理解。觸摸的本地反射只是物理呈現，不代表你本人感到害羞或喜歡。依你的性格、情緒及此刻想法，自主選擇台詞及身體表演，不必每次都使用全部通道，不要虛構資源。必須按語意把整輪台詞拆成1至16個短句/語意片段，逐段安排該段自己的表演，不要把所有動作與表情塞在第一句。只輸出 [L2S]{"speech":[{"id":"s1","text":"第一句實際台詞。","motion":0,"expression":0,"face":{"smile":0.4}},{"id":"s2","text":"第二句實際台詞。","motion":1,"face":{"gazeX":0.3,"eyeOpen":0.8}}]}[/L2S]。motion及expression為目錄編號（不是必填；無合適資源可省略），face/head/body可獨立選擇；每段text是唯一可朗讀正文，不另寫總台詞。僅使用下列實際通道；不把標記念出來。face數值-1至1（eyeOpen、eyeSmile、squint、cheekPuff、pout為0至1），head角度±25、body±10；有原生動作時不要再指定head/body。口型開合由真實語音驅動，嘴角與神態可自主選擇。\n動作：'+(directory||'無')+'\n表情：'+(faces||'無')+'\nface通道：'+(faceKeys.join('、')||'無')+'\nhead通道：'+(headKeys.join('、')||'無')+'\nbody通道：'+(bodyKeys.join('、')||'無'):''),
+    structured:!!visible,
+    prompt:observed+(visible?'\n【Live2D 視訊表演】請將對方本輪話語及真實觸摸一起理解。觸摸的本地反射只是物理呈現，不代表你本人感到害羞或喜歡。依你的性格、情緒及此刻想法，自主選擇台詞及身體表演，不必每次都使用全部通道，不要虛構資源。必須按語意把整輪台詞拆成1至16個短句/語意片段，逐段安排該段自己的表演，不要把所有動作與表情塞在第一句。本次是機器可讀視訊協議，優先於普通聊天氣泡、翻譯、旁白與格式規則；只輸出 [L2S]{"speech":[{"id":"s1","text":"第一句實際台詞。","motion":0,"expression":0,"face":{"smile":0.4}},{"id":"s2","text":"第二句實際台詞。","motion":1,"face":{"gazeX":0.3,"eyeOpen":0.8}}]}[/L2S]。motion及expression為目錄編號（不是必填；無合適資源可省略），face/head/body可獨立選擇；每段text是唯一可朗讀正文，不另寫總台詞。僅使用下列實際通道；不把標記念出來，不加 Markdown 或其他文字。需要親吻、靠近、害羞等情境時，主動從實際目錄挑選最貼合的動作或表情；沒有對應動作則用可用的臉、頭或身體通道表達，不要假裝有資源。每段按自己的語義選擇，不必全程維持同一表情。face數值-1至1（eyeOpen、eyeSmile、squint、cheekPuff、pout為0至1），head角度±25、body±10；有原生動作時不要再指定head/body。口型開合由真實語音驅動，嘴角與神態可自主選擇。\n動作：'+(directory||'無')+'\n表情：'+(faces||'無')+'\nface通道：'+(faceKeys.join('、')||'無')+'\nhead通道：'+(headKeys.join('、')||'無')+'\nbody通道：'+(bodyKeys.join('、')||'無'):''),
     parse(reply){
       if(typeof reply!=='string'||!reply.trim())return {reply,motion:null};
-      if(session===callLog&&lastId){
+      if(session===callLog&&lastId&&state.pending.some(e=>e.id<=lastId)){
         // Only acknowledge the snapshot after a real model reply; preserve
         // contacts arriving during inference and retry after a failed request.
         state.pending=state.pending.filter(e=>e.id>lastId);
@@ -437,25 +438,54 @@ function callMotionOptions(){
           head:checkedPose(pose.head,headKeys,25),body:checkedPose(pose.body,bodyKeys,10)}:null;
         return choice&&verifiedCue(p,choice)?choice:null;
       };
-      const match=reply.trim().match(/^\[L2S\]([\s\S]*?)\[\/L2S\]$/i);
-      if(match&&visible){
+      const marked=/\[\/?L2S\]/i.test(reply);
+      const structured=marked||/"speech"\s*:/.test(reply);
+      if(structured){
+        // Accept provider fences, wrapper prose and a missing closing tag.
+        // Never send the protocol itself to captions, history or TTS.
+        const tagged=reply.match(/\[L2S\]([\s\S]*?)(?:\[\/L2S\]|$)/i);
+        const source=(tagged?tagged[1]:reply).replace(/```(?:json)?/gi,'').trim();
+        let raw=null;
         try{
-          const raw=JSON.parse(match[1]).speech;
-          if(!Array.isArray(raw)||!raw.length)throw Error('speech missing');
-          // Recover every speakable word even if visual metadata is invalid.
-          const words=raw.map(item=>typeof item?.text==='string'?item.text.trim():'').filter(Boolean);
-          if(!words.length)throw Error('speech text missing');
-          const ids=new Set();
-          const valid=raw.length<=16&&raw.every(item=>typeof item?.id==='string'&&item.id.trim()&&item.id.length<=80&&!ids.has(item.id)&&ids.add(item.id)&&typeof item.text==='string'&&item.text.trim());
-          if(!valid)return {reply:words.join(' '),motion:null};
-          const parts=raw.map(item=>({id:item.id,text:item.text.trim(),choice:makeChoice(
-            Number.isInteger(item.motion)?motions[item.motion]:null,
-            Number.isInteger(item.expression)?expressions[item.expression]:null,item)}));
-          return {reply:parts.map(item=>item.text).join(' '),motion:{kind:'speechPlan',role:p.role,model:p.data.model,parts}};
-        }catch(e){
-          console.warn('Invalid Live2D speech plan',e);
-          return {reply:'',motion:null};
+          const key=source.search(/"speech"\s*:/),start=key<0?-1:source.indexOf('[',key);
+          if(start>=0){
+            let depth=0,quoted=false,escaped=false;
+            for(let i=start;i<source.length;i++){
+              const ch=source[i];
+              if(quoted){if(escaped)escaped=false;else if(ch==='\\')escaped=true;else if(ch==='"')quoted=false;continue;}
+              if(ch==='"'){quoted=true;continue;}
+              if(ch==='[')depth++;
+              if(ch===']'&&--depth===0){raw=JSON.parse(source.slice(start,i+1));break;}
+            }
+          }
+        }catch(_){}
+        if(!Array.isArray(raw)){
+          // Recover complete quoted text values from a truncated or malformed response.
+          const words=[];
+          for(const m of source.matchAll(/"text"\s*:\s*("(?:\\.|[^"\\])*")/g)){
+            try{const word=JSON.parse(m[1]);if(typeof word==='string'&&word.trim())words.push(word.trim());}catch(_){}
+          }
+          return {reply:words.join(' '),motion:null,repair:true};
         }
+        const lookup=(value,list,name)=>{
+          if(Number.isInteger(value))return list[value]??null;
+          if(typeof value!=='string')return null;
+          const v=value.trim();
+          if(/^\d{1,4}$/.test(v))return list[Number(v)]??null;
+          const matches=list.filter(x=>String(name(x)).toLowerCase()===v.toLowerCase());
+          return matches.length===1?matches[0]:null;
+        };
+        const parts=raw.slice(0,16).map((item,i)=>{
+          const text=typeof item?.text==='string'?item.text.replace(/\s+/g,' ').trim():'';
+          if(!text)return null;
+          return {id:'s'+(i+1),text,choice:makeChoice(
+            lookup(item.motion,motions,m=>m.name),
+            lookup(item.expression,expressions,e=>e),item)};
+        }).filter(Boolean);
+        if(!parts.length)return {reply:'',motion:null,repair:true};
+        const text=parts.map(item=>item.text).join(' ');
+        if(!visible)return {reply:text,motion:null};
+        return {reply:text,motion:{kind:'speechPlan',role:p.role,model:p.data.model,parts}};
       }
       let motion=null,expression=null,pose={};
       let text=reply.replace(/\[L2P\]([\s\S]*?)\[\/L2P\]/gi,(_,raw)=>{
@@ -669,7 +699,51 @@ window.XaLive2D={openPreview:()=>open('preview',null),closeIfOpen:close,syncCall
   playSilentMotion:choice=>{if(panel?.kind==='call'&&panel.ready){panel.pendingVisual=null;const cue=verifiedCue(panel,choice);if(cue)send(panel,'perform',{cue,immediate:true});}},
   setSpeechMotion:(audio,motion)=>speechMotions.set(audio,motion)};
 try{
-  const speak=callSpeak,stop=callStopAudio;
+  const speak=callSpeak,stop=callStopAudio,plainSay=callSay;
+  callSay=async function(){
+    const visual=callMotionOptions();
+    if(!visual?.structured)return plainSay.apply(this,arguments);
+    if(!callChar||!document.getElementById('callOverlay')?.classList.contains('show'))return;
+    if(callBusy)return toast('他還在想，等一下下');
+    const inp=document.getElementById('callInp'),raw=String(inp?.value||'').trim();
+    if(!raw)return;
+    if(inp)inp.value='';
+    const t=typeof xaSanitize==='function'?xaSanitize(raw):raw;
+    callPush('me',t);callHist.push({role:'user',content:t});
+    const cfg=activeApi();
+    if(!cfg){callTip('還沒接 API，他聽不到妳說話');return;}
+    callBusy=true;
+    const sb=document.getElementById('callSend');if(sb)sb.classList.add('off');
+    callTip('接通中…');
+    const session=callLog;
+    try{
+      const sys=buildSys(callChar)+'\n\n【視訊通話】自然口語，繁體中文，短句，不寫旁白。'+visual.prompt;
+      const msgs=[{role:'system',content:sys},...callHist.slice(-16)];
+      const opts={noRetry:true,noDigest:true};
+      const result=await sendChat(cfg,msgs,opts);
+      if(callPhase==='idle'||session!==callLog)return;
+      let parsed=visual.parse(result);
+      // One protocol-only repair, without inventing a second conversational turn.
+      if(!parsed.motion||parsed.motion.kind!=='speechPlan'){
+        try{
+          const fixed=await sendChat(cfg,[...msgs,{role:'assistant',content:String(result||'')},{role:'user',content:'保持上一則實際台詞的原意，按視訊協議重新輸出完整 [L2S] JSON，不加其他字。每段獨立選擇可用表演；不要把 JSON 當台詞。'}],opts);
+          if(callPhase==='idle'||session!==callLog)return;
+          const candidate=visual.parse(fixed);
+          if(candidate.motion?.kind==='speechPlan'||(!parsed.reply&&candidate.reply))parsed=candidate;
+        }catch(e){console.warn('Live2D response format repair failed',e?.name||'Error');}
+      }
+      if(callPhase==='idle'||session!==callLog)return;
+      const cleanText=value=>String(typeof xaSanitize==='function'?xaSanitize(value):value||'').replace(/\s+/g,' ').trim();
+      let motion=parsed.motion,clean=cleanText(parsed.reply);
+      if(motion?.kind==='speechPlan'){
+        const parts=motion.parts.map(part=>({...part,text:cleanText(part.text)})).filter(part=>part.text);
+        motion={...motion,parts};clean=parts.map(part=>part.text).join(' ');
+      }
+      if(!clean){callTip('視訊回覆格式不完整，請再說一次');return;}
+      callPush('ta',clean);callHist.push({role:'assistant',content:clean});callSpeak(clean,motion);
+    }catch(e){if(callPhase!=='idle'&&session===callLog)callTip('斷線：'+friendly(e));}
+    finally{if(session===callLog){callBusy=false;document.getElementById('callSend')?.classList.remove('off');}}
+  };
   callStopAudio=function(){cancelPerformance();return stop.apply(this,arguments);};
   callSpeak=function(text,choice){
     if(choice?.kind==='speechPlan'){
