@@ -101,6 +101,51 @@ function selectedMotion(p){
     return p.data.motions.find(x=>x.group===group&&x.index===index)||null;
   }catch(_){return null;}
 }
+// Decode locally generated TTS audio separately from playback: never reroute or mute
+// the existing audio element, and never fetch remote voice URLs for lip sync.
+const speechEnvelopes=new WeakMap();
+function speechEnvelope(media){
+  const source=media.currentSrc||media.src||'';
+  if(!/^(blob:|data:audio\/)/i.test(source)||source.length>32*1024*1024)return null;
+  const cached=speechEnvelopes.get(media);
+  if(cached?.source===source)return cached;
+  const entry={source,levels:null,step:.04};speechEnvelopes.set(media,entry);
+  (async()=>{
+    const Context=window.AudioContext||window.webkitAudioContext;
+    if(!Context)return;
+    let ctx;
+    try{
+      const response=await fetch(source);
+      const blob=await response.blob();
+      if(!blob.size||blob.size>24*1024*1024)return;
+      ctx=new Context();
+      const buffer=await ctx.decodeAudioData(await blob.arrayBuffer());
+      if(!buffer.length||!buffer.sampleRate||buffer.duration>600)return;
+      const step=Math.max(1,Math.round(buffer.sampleRate*entry.step));
+      const levels=new Float32Array(Math.ceil(buffer.length/step));
+      const channels=Array.from({length:Math.min(buffer.numberOfChannels,2)},(_,i)=>buffer.getChannelData(i));
+      if(!channels.length)return;
+      for(let i=0;i<levels.length;i++){
+        let energy=0,n=0;
+        const end=Math.min(buffer.length,(i+1)*step);
+        for(let j=i*step;j<end;j+=4)for(const channel of channels){energy+=channel[j]*channel[j];n++;}
+        levels[i]=Math.min(1,Math.max(0,(Math.sqrt(energy/Math.max(1,n))-.008)*5));
+      }
+      entry.levels=levels;entry.step=step/buffer.sampleRate;
+    }catch(_){/* Unsupported or revoked local media: retain existing speaking fallback. */}
+    finally{if(ctx)try{await ctx.close();}catch(_){}}
+  })();
+  return entry;
+}
+function mouthState(p){
+  if(!p.speaking||!p.media||p.media.paused||p.media.ended)return {hasPcmSamples:false,mouth:0};
+  const e=speechEnvelope(p.media);
+  if(!e?.levels)return {hasPcmSamples:false,mouth:0};
+  const time=p.media.currentTime;
+  if(!Number.isFinite(time))return {hasPcmSamples:false,mouth:0};
+  const i=Math.min(e.levels.length-1,Math.max(0,Math.floor(time/e.step)));
+  return {hasPcmSamples:true,mouth:e.levels[i]||0};
+}
 function watchMedia(p,media){
   if(media===p.media)return;
   if(p.media&&p.listeners){
@@ -112,6 +157,7 @@ function watchMedia(p,media){
   const start=()=>{
     if(panel!==p||p.media!==media||p.speaking)return;
     p.speaking=true;p.speechSequence=++seq;
+    speechEnvelope(media);
     const motion=p.nextMotion;p.nextMotion=null;
     if(motion){
       const cue={visualSequence:p.speechSequence,motion:{group:motion.group,index:motion.index}};
@@ -143,7 +189,7 @@ function tick(p){
     try{media=callAudio;thinking=!!callBusy;}catch(_){}
   }
   watchMedia(p,media);
-  if(p.ready)send(p,'update',{state:{speaking:!!p.speaking,thinking,hasPcmSamples:false,mouth:0}});
+  if(p.ready)send(p,'update',{state:{speaking:!!p.speaking,thinking,...mouthState(p)}});
 }
 function open(kind,c){
   const role=kind==='preview'?(roleKey(c)||'preview'):roleKey(c);
@@ -205,7 +251,7 @@ function open(kind,c){
     if(av){p.avatarDisplay=av.style.display;av.style.display='none';av.after(root);}
     else document.getElementById('callOverlay').prepend(root);
   }
-  controls(p);p.tick=setInterval(()=>tick(p),120);loadStatus(p);
+  controls(p);p.tick=setInterval(()=>tick(p),40);loadStatus(p);
 }
 window.addEventListener('message',event=>{
   const p=panel;
