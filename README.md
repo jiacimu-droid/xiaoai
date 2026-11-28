@@ -13,3 +13,6 @@
 
 ## 驗證
 本地 `node --test tests/phone-bridge.test.cjs` 與改動的內嵌 JavaScript 語法檢查通過。Android 編譯和真機互動尚待 GitHub Actions 與裝置驗證。請先測試普通 App 的搜尋框、點擊、長按、滑動和返回，再評估其他 App。
+
+## 語音轉文字
+聊天標題列的「語音轉文字」使用 Android 原生麥克風錄音，完成後才將音訊直接送往 ElevenLabs Scribe API。輸入自己的 STT API Key（僅本機私有設定保存），可選自動、粵語、普通話或英文；可先編輯轉寫結果，再填入聊天輸入框或複製。不會自動發送訊息；離開錄音畫面會取消未提交錄音。既有語音及 TTS 設定保持不變。服務用量依 ElevenLabs 帳戶計費。

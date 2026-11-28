@@ -71,7 +71,7 @@ jobs:
           test -f "$sdk_root/platforms/android-35/android.jar"
           test -x "$sdk_root/build-tools/35.0.0/apksigner"
       - name: Verify bridge and runtime diagnostics
-        run: node --check app/src/main/assets/phone-bridge.js && node --test tests/*.test.cjs
+        run: node --check app/src/main/assets/phone-bridge.js && node --check app/src/main/assets/speech-input.js && node --test tests/*.test.cjs
       - name: Verify Huawei grant evidence reconciliation
         run: |
           out="$(mktemp -d)"
@@ -98,7 +98,7 @@ jobs:
           python3 - "$apk" <<'PY'
           import sys, zipfile
           with zipfile.ZipFile(sys.argv[1]) as z:
-              for asset in ['phone-bridge.js', 'runtime-log.js', 'runtime-log-early.js', 'live2d-entry.js', 'live2d/stage.html', 'live2d/bootstrap.js', 'live2d/host.js', 'live2d/renderer.js']:
+              for asset in ['phone-bridge.js', 'speech-input.js', 'runtime-log.js', 'runtime-log-early.js', 'live2d-entry.js', 'live2d/stage.html', 'live2d/bootstrap.js', 'live2d/host.js', 'live2d/renderer.js']:
                   assert 'assets/' + asset in z.namelist(), asset
               assert not any(p.startswith('assets/live2d/wolf-motions/') or p.endswith('.moc3') for p in z.namelist()), 'private skin asset in APK'
               html = z.read('assets/index.html').decode('utf-8')

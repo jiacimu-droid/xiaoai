@@ -26,6 +26,7 @@ public final class MainActivity extends Activity {
     private boolean resumed;
     private BackupFiles backupFiles;
     private Live2DStore live2d;
+    private SpeechInput speechInput;
     private static final String STAGE_HOST="live2d.xiaoai.invalid";
     private static WebResourceResponse notFound(){return new WebResourceResponse("text/plain","UTF-8",404,"Not Found",Collections.emptyMap(),new java.io.ByteArrayInputStream(new byte[0]));}
     private JavaScriptReplyProxy statusReply;
@@ -44,6 +45,7 @@ public final class MainActivity extends Activity {
         WebViewAssetLoader loader=new WebViewAssetLoader.Builder().addPathHandler("/assets/",new WebViewAssetLoader.AssetsPathHandler(this)).build();
         backupFiles=new BackupFiles(this);
         live2d=new Live2DStore(this);
+        speechInput=new SpeechInput(this);
         WebViewAssetLoader.AssetsPathHandler stageAssets=new WebViewAssetLoader.AssetsPathHandler(this);
         WebViewAssetLoader stageLoader=new WebViewAssetLoader.Builder().setDomain(STAGE_HOST)
             .addPathHandler("/assets/live2d/",path->java.util.Arrays.asList("stage.html","bootstrap.js","renderer.js","host.js").contains(path)?stageAssets.handle("live2d/"+path):notFound())
@@ -55,7 +57,7 @@ public final class MainActivity extends Activity {
             }
             @Override public void onPageFinished(WebView v,String url){
                 super.onPageFinished(v,url);
-                if((ORIGIN+"/assets/index.html").equals(url)){backupFiles.installScript(v);live2d.installScript(v); }
+                if((ORIGIN+"/assets/index.html").equals(url)){backupFiles.installScript(v);live2d.installScript(v);speechInput.installScript(v); }
             }
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r){if(STAGE_HOST.equals(r.getUrl().getHost())){WebResourceResponse response=stageLoader.shouldInterceptRequest(r.getUrl());return response!=null?response:notFound();}return loader.shouldInterceptRequest(r.getUrl());}
             @Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){
@@ -80,6 +82,7 @@ public final class MainActivity extends Activity {
         if(WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)){
             backupFiles.bind(web,ORIGIN);
             live2d.bind(web);
+            speechInput.bind(web,ORIGIN);
             WebViewCompat.addWebMessageListener(web,"PhoneNative",Collections.singleton(ORIGIN),(view,msg,origin,main,reply)->{
                 if(!main||!isAppOrigin(origin))return;
                 String requestId=null;
@@ -224,7 +227,8 @@ public final class MainActivity extends Activity {
         statusHandler.removeCallbacks(refreshStatus);
         for(long delay:new long[]{250,750,1500,3000,6000})statusHandler.postDelayed(refreshStatus,delay);
     }
-    @Override protected void onPause(){resumed=false;statusHandler.removeCallbacks(refreshStatus);super.onPause();}
+    @Override public void onRequestPermissionsResult(int request,String[] permissions,int[] grants){super.onRequestPermissionsResult(request,permissions,grants);if(speechInput!=null)speechInput.onPermissionResult(request);}
+    @Override protected void onPause(){if(speechInput!=null)speechInput.onPause();resumed=false;statusHandler.removeCallbacks(refreshStatus);super.onPause();}
     @Override protected void onActivityResult(int r,int c,Intent d){super.onActivityResult(r,c,d);if(live2d!=null&&live2d.onResult(r,c,d))return;if(backupFiles!=null&&backupFiles.onResult(r,c,d))return;if(r==42&&chooser!=null){chooser.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(c,d));chooser=null;}}
     @Override public void onBackPressed(){if(web.canGoBack())web.goBack();else super.onBackPressed();}
     @Override protected void onDestroy(){
@@ -235,6 +239,7 @@ public final class MainActivity extends Activity {
         if(PhoneService.instance!=null)PhoneService.instance.cancel();
         if(backupFiles!=null)backupFiles.close();
         if(live2d!=null)live2d.close();
+        if(speechInput!=null)speechInput.close();
         if(chooser!=null){chooser.onReceiveValue(null);chooser=null;}
         if(web!=null)web.destroy();
         super.onDestroy();
