@@ -8,6 +8,7 @@ let panel=null,serial=0,seq=0;
 const pending=new Map();
 // Per-call perception survives minimizing and switching to voice. No touch initiates a model request.
 const callPerception=new WeakMap();
+let performanceJob=null;
 function toastLocal(s){try{toast(s);}catch(_){console.warn(s);}}
 function rpc(action,role){
   return new Promise((resolve,reject)=>{
@@ -171,6 +172,7 @@ function watchMedia(p,media){
     const choice=speechMotions.get(media);
     const cue=verifiedCue(p,choice);
     if(cue){p.pendingVisual=null;send(p,'perform',{cue:{...cue,visualSequence:p.speechSequence}});}
+    else if(performanceJob?.session===p.session)send(p,'perform',{cue:{visualSequence:p.speechSequence}});
     send(p,'event',{event:'playing',sequence:p.speechSequence});
   };
   const finish=event=>{
@@ -316,7 +318,9 @@ function syncCall(){
   const manual=make('details','xa-l2d-manual');manual.append(make('summary','','動作 / 表情'),tools);
   p.touchReceipt=make('div','xa-l2d-touch-receipt','選擇方式後，直接觸摸角色');
   p.touchReceipt.setAttribute('aria-live','polite');
-  interaction.append(touchMode(p),p.touchReceipt,manual);
+  p.partCaption=make('div','xa-l2d-part-caption');p.partCaption.hidden=true;
+  p.partCaption.setAttribute('aria-live','off');
+  interaction.append(p.partCaption,touchMode(p),p.touchReceipt,manual);
   p.interaction=interaction;
   root.append(stage,fallback,interaction);
   name.closest('.call-hero').after(root);
@@ -417,7 +421,7 @@ function callMotionOptions(){
   const headKeys=supportedChannels(visible?p:null,headChannels);
   const bodyKeys=supportedChannels(visible?p:null,bodyChannels);
   return {
-    prompt:observed+(visible?'\n【Live2D 視訊表演】請將對方本輪話語及真實觸摸一起理解。觸摸的本地反射只是物理呈現，不代表你本人感到害羞或喜歡。依你的性格、情緒及此刻想法，自主選擇台詞及身體表演，不必每次都使用全部通道，不要虛構資源。台詞後可附 [L2D:動作編號] [L2E:表情編號]，也可附 [L2P]{"face":{"gazeX":0.3,"eyeOpen":0.8,"smile":0.4},"head":{"yaw":8},"body":{"roll":3}}[/L2P]，僅使用下列實際通道；不把標記念出來。face數值-1至1（eyeOpen、eyeSmile、squint、cheekPuff、pout為0至1），head角度±25、body±10；有原生動作時不要再指定head/body。口型開合由真實語音驅動，嘴角與神態可自主選擇。\n動作：'+(directory||'無')+'\n表情：'+(faces||'無')+'\nface通道：'+(faceKeys.join('、')||'無')+'\nhead通道：'+(headKeys.join('、')||'無')+'\nbody通道：'+(bodyKeys.join('、')||'無'):''),
+    prompt:observed+(visible?'\n【Live2D 視訊表演】請將對方本輪話語及真實觸摸一起理解。觸摸的本地反射只是物理呈現，不代表你本人感到害羞或喜歡。依你的性格、情緒及此刻想法，自主選擇台詞及身體表演，不必每次都使用全部通道，不要虛構資源。必須按語意把整輪台詞拆成1至16個短句/語意片段，逐段安排該段自己的表演，不要把所有動作與表情塞在第一句。只輸出 [L2S]{"speech":[{"id":"s1","text":"第一句實際台詞。","motion":0,"expression":0,"face":{"smile":0.4}},{"id":"s2","text":"第二句實際台詞。","motion":1,"face":{"gazeX":0.3,"eyeOpen":0.8}}]}[/L2S]。motion及expression為目錄編號（不是必填；無合適資源可省略），face/head/body可獨立選擇；每段text是唯一可朗讀正文，不另寫總台詞。僅使用下列實際通道；不把標記念出來。face數值-1至1（eyeOpen、eyeSmile、squint、cheekPuff、pout為0至1），head角度±25、body±10；有原生動作時不要再指定head/body。口型開合由真實語音驅動，嘴角與神態可自主選擇。\n動作：'+(directory||'無')+'\n表情：'+(faces||'無')+'\nface通道：'+(faceKeys.join('、')||'無')+'\nhead通道：'+(headKeys.join('、')||'無')+'\nbody通道：'+(bodyKeys.join('、')||'無'):''),
     parse(reply){
       if(typeof reply!=='string'||!reply.trim())return {reply,motion:null};
       if(session===callLog&&lastId){
@@ -425,6 +429,33 @@ function callMotionOptions(){
         // contacts arriving during inference and retry after a failed request.
         state.pending=state.pending.filter(e=>e.id>lastId);
         state.recent=state.recent.concat(touches).slice(-12);
+      }
+      const makeChoice=(motion,expression,pose={})=>{
+        if(!expression&&motion&&expressions.includes(motion.expression))expression=motion.expression;
+        const choice=visible?{role:p.role,model:p.data.model,motion,expression,
+          face:checkedPose(pose.face,faceKeys,1,positiveFace),
+          head:checkedPose(pose.head,headKeys,25),body:checkedPose(pose.body,bodyKeys,10)}:null;
+        return choice&&verifiedCue(p,choice)?choice:null;
+      };
+      const match=reply.trim().match(/^\[L2S\]([\s\S]*?)\[\/L2S\]$/i);
+      if(match&&visible){
+        try{
+          const raw=JSON.parse(match[1]).speech;
+          if(!Array.isArray(raw)||!raw.length)throw Error('speech missing');
+          // Recover every speakable word even if visual metadata is invalid.
+          const words=raw.map(item=>typeof item?.text==='string'?item.text.trim():'').filter(Boolean);
+          if(!words.length)throw Error('speech text missing');
+          const ids=new Set();
+          const valid=raw.length<=16&&raw.every(item=>typeof item?.id==='string'&&item.id.trim()&&item.id.length<=80&&!ids.has(item.id)&&ids.add(item.id)&&typeof item.text==='string'&&item.text.trim());
+          if(!valid)return {reply:words.join(' '),motion:null};
+          const parts=raw.map(item=>({id:item.id,text:item.text.trim(),choice:makeChoice(
+            Number.isInteger(item.motion)?motions[item.motion]:null,
+            Number.isInteger(item.expression)?expressions[item.expression]:null,item)}));
+          return {reply:parts.map(item=>item.text).join(' '),motion:{kind:'speechPlan',role:p.role,model:p.data.model,parts}};
+        }catch(e){
+          console.warn('Invalid Live2D speech plan',e);
+          return {reply:'',motion:null};
+        }
       }
       let motion=null,expression=null,pose={};
       let text=reply.replace(/\[L2P\]([\s\S]*?)\[\/L2P\]/gi,(_,raw)=>{
@@ -435,11 +466,7 @@ function callMotionOptions(){
         else expression=expressions[Number(index)]||expression;
         return '';
       });
-      if(!expression&&motion&&expressions.includes(motion.expression))expression=motion.expression;
-      const choice=visible?{role:p.role,model:p.data.model,motion,expression,
-        face:checkedPose(pose.face,faceKeys,1,positiveFace),
-        head:checkedPose(pose.head,headKeys,25),body:checkedPose(pose.body,bodyKeys,10)}:null;
-      return {reply:text.trim(),motion:choice&&verifiedCue(p,choice)?choice:null};
+      return {reply:text.trim(),motion:makeChoice(motion,expression,pose)};
     }
   };
 }
@@ -464,6 +491,7 @@ style.textContent+=`
 .xa-l2d-call-interaction .xa-l2d-touch-modes {padding:4px;border-radius:24px;background:#304c62c9;color:#fff}
 .xa-l2d-touch-modes button {border:0;background:transparent;color:inherit;border-radius:18px;min-height:34px;padding:5px 12px;cursor:pointer}
 .xa-l2d-touch-modes button[aria-pressed=true] {background:var(--paper,#fff);color:var(--ink,#263746);box-shadow:0 1px 5px #0002}
+.xa-l2d-part-caption {max-width:100%;text-align:center;font-size:15px;line-height:1.35;color:white;background:#304c62d9;border-radius:12px;padding:6px 12px;overflow-wrap:anywhere}
 .xa-l2d-touch-receipt {font-size:11px;color:white;text-shadow:0 1px 4px #000;background:#304c6299;border-radius:10px;padding:3px 8px}
 .xa-l2d-manual {pointer-events:auto;text-align:center;max-width:100%}
 .xa-l2d-manual summary {display:inline-block;padding:5px 12px;border-radius:14px;background:#304c62c9;color:white;font-size:11px;cursor:pointer}
@@ -534,16 +562,115 @@ function install(){
     };
   }catch(e){console.warn('Live2D desktop',e);}
 }
-window.XaLive2D={openPreview:()=>open('preview',null),closeIfOpen:close,syncCall,callMotionOptions,playSilentMotion:choice=>{if(panel?.kind==='call'&&panel.ready){panel.pendingVisual=null;const cue=verifiedCue(panel,choice);if(cue)send(panel,'perform',{cue,immediate:true});}},setSpeechMotion:(audio,motion)=>speechMotions.set(audio,motion)};
-// If audio synthesis/playback fails, preserve the role's selected visual beat
-// in the same call, without issuing another model request.
+function activeJob(job){
+  return performanceJob===job&&job.session===callLog&&job.request===callSpeechRequest&&callPhase!=='idle';
+}
+function segmentCaption(job,text){
+  const p=panel;
+  if(p?.kind!=='call'||p.session!==job.session||!p.partCaption)return;
+  p.partCaption.textContent=text||'';p.partCaption.hidden=!text;
+}
+function cancelPerformance(){
+  const job=performanceJob;if(!job)return;
+  performanceJob=null;segmentCaption(job,'');
+  if(job.cancelWait)job.cancelWait();
+}
+function silentPart(job,part){
+  if(!activeJob(job))return Promise.resolve(false);
+  segmentCaption(job,part.text);
+  const p=panel;
+  if(p?.kind==='call'&&p.ready&&p.session===job.session){
+    const cue=verifiedCue(p,part.choice);
+    send(p,'perform',{cue:cue||{},immediate:true});
+  }
+  // Subtitle-only pacing, explicitly not an audible speech clock.
+  return new Promise(resolve=>{
+    const timer=setTimeout(()=>{job.cancelWait=null;resolve(activeJob(job));},Math.max(1100,Math.min(6500,part.text.length*155)));
+    job.cancelWait=()=>{clearTimeout(timer);job.cancelWait=null;resolve(false);};
+  });
+}
+function playPart(job,part,url){
+  if(!activeJob(job)){URL.revokeObjectURL(url);return Promise.resolve('cancelled');}
+  const audio=new Audio(url);callAudio=audio;
+  if(part.choice)speechMotions.set(audio,part.choice);
+  return new Promise(resolve=>{
+    let done=false;
+    const finish=result=>{
+      if(done)return;done=true;job.cancelWait=null;
+      if(callAudio===audio)callAudio=null;
+      if(result!=='ended')try{audio.pause();}catch(_){}
+      URL.revokeObjectURL(url);resolve(result);
+    };
+    job.cancelWait=()=>finish('cancelled');
+    audio.addEventListener('playing',()=>{
+      if(!activeJob(job))return finish('cancelled');
+      segmentCaption(job,part.text);
+      const p=panel;
+      if(p?.kind==='call'&&p.session===job.session&&p.ready)watchMedia(p,audio);
+    });
+    audio.addEventListener('ended',()=>finish('ended'),{once:true});
+    audio.addEventListener('error',()=>finish('error'),{once:true});
+    audio.addEventListener('pause',()=>{if(!audio.ended)finish('cancelled');},{once:true});
+    try{Promise.resolve(audio.play()).catch(()=>finish('error'));}catch(_){finish('error');}
+  });
+}
+async function performSpeechPlan(text,plan){
+  callStopAudio();
+  const job={session:callLog,request:++callSpeechRequest,cancelWait:null};performanceJob=job;
+  let config=null;try{config=DB.get('ttsConfig',null);}catch(_){}
+  let silent=!callTtsOn||!config?.key||!config?.group||typeof minimaxSpeak!=='function';
+  let failure='';
+  try{
+    for(const part of plan.parts){
+      if(!activeJob(job))return;
+      if(!silent){
+        callTip('正在用 MiniMax 合成語音…');
+        let url;
+        try{url=await minimaxSpeak(part.text,config);}catch(e){
+          if(!activeJob(job))return;silent=true;failure='語音失敗：'+friendly(e);
+        }
+        if(url){
+          if(!activeJob(job)){URL.revokeObjectURL(url);return;}
+          callTipClear();
+          const result=await playPart(job,part,url);
+          if(!activeJob(job)||result==='cancelled')return;
+          if(result==='ended')continue;
+          silent=true;failure='語音放不出來，先看字幕';
+        }
+      }
+      if(!activeJob(job))return;
+      if(!await silentPart(job,part))return;
+    }
+    if(activeJob(job)){
+      callTipClear();
+      if(failure)callTip(failure);
+      else if(silent)callTip('本輪僅字幕及分段表演');
+    }
+  }finally{
+    if(performanceJob===job){performanceJob=null;segmentCaption(job,'');}
+  }
+}
+window.XaLive2D={openPreview:()=>open('preview',null),closeIfOpen:close,syncCall,callMotionOptions,
+  isPerforming:()=>!!performanceJob&&activeJob(performanceJob),
+  playSilentMotion:choice=>{if(panel?.kind==='call'&&panel.ready){panel.pendingVisual=null;const cue=verifiedCue(panel,choice);if(cue)send(panel,'perform',{cue,immediate:true});}},
+  setSpeechMotion:(audio,motion)=>speechMotions.set(audio,motion)};
 try{
-  const speak=callSpeak;
+  const speak=callSpeak,stop=callStopAudio;
+  callStopAudio=function(){cancelPerformance();return stop.apply(this,arguments);};
   callSpeak=function(text,choice){
+    if(choice?.kind==='speechPlan'){
+      const normalize=value=>String(value||'').replace(/\s+/g,' ').trim();
+      if(normalize(choice.parts.map(part=>part.text).join(' '))===normalize(text)){
+        return performSpeechPlan(text,choice).catch(e=>{console.warn('Live2D segmented speech',e);});
+      }
+      // Never attach stale choreography to text modified by the chat parser.
+      choice=null;
+    }
+    cancelPerformance();
     const p=panel,session=callLog;
     if(p?.kind==='call'&&choice){p.pendingVisual={choice,session,expires:Date.now()+90000};}
-    return speak.apply(this,arguments);
+    return speak.call(this,text,choice);
   };
-}catch(e){console.warn('Live2D speech fallback',e);}
+}catch(e){console.warn('Live2D speech integration',e);}
 install();
 })();
