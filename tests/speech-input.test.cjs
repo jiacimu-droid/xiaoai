@@ -11,7 +11,7 @@ test('native STT requires explicit input and never invokes chat send',()=>{
 });
 
 test('call input shares STT configuration and the existing call turn, with mute and session guards',()=>{
-  assert.match(source,/rpc\('callRecord'\)/);
+  assert.match(source,/rpc\('callRecord',\{\},partial=>/);
   assert.match(source,/rpc\('cancelCall'\)/);
   assert.match(source,/callPhase==='connected'&&!callMuteOn&&!document.hidden/);
   assert.match(source,/job.session!==callLog/);
@@ -21,4 +21,6 @@ test('call input shares STT configuration and the existing call turn, with mute 
   assert.match(native,/active.call="callRecord".equals\(action\)/);
   assert.match(native,/if\(!spoke&&now-callStarted>=12000\)/);
   assert.match(native,/if\(req.cancelled\)/);
+  assert.match(native,/if\(active.call&&active.config.realtime\(\)\)/);
+  assert.match(native,/"model_id",config.batchModel\(\)/);
 });

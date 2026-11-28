@@ -654,16 +654,18 @@ async function performSpeechPlan(text,plan){
   callStopAudio();
   const job={session:callLog,request:++callSpeechRequest,cancelWait:null};performanceJob=job;
   let config=null;try{config=DB.get('ttsConfig',null);}catch(_){}
-  const enabled=!!callTtsOn&&!!config?.key&&!!config?.group&&typeof minimaxSpeak==='function';
+  const eleven=window.XaSpeechInput?.elevenConfig();
+  const name=eleven?'ElevenLabs':'MiniMax';
+  const enabled=!!callTtsOn&&(eleven?!!eleven.voice:!!config?.key&&!!config?.group&&typeof minimaxSpeak==='function');
   let failed=0,lastFailure='';
   try{
     for(const part of plan.parts){
       if(!activeJob(job))return;
       if(enabled){
-        callTip('正在用 MiniMax 合成語音…');
+        callTip('正在用 '+name+' 合成語音…');
         let url;
         try{
-          url=await minimaxSpeak(part.text,config);
+          url=await (eleven?window.XaSpeechInput.elevenSpeak(part.text,eleven):minimaxSpeak(part.text,config));
           if(typeof url!=='string'||!url.trim())throw Error('EmptyAudioSource');
         }catch(e){
           if(!activeJob(job))return;
@@ -688,7 +690,7 @@ async function performSpeechPlan(text,plan){
     if(activeJob(job)){
       callTipClear();
       if(failed)callTip(failed+' 段語音未完整播放：'+lastFailure);
-      else if(!enabled)callTip(callTtsOn?'尚未完成 MiniMax 語音設定，本輪僅字幕':'已關閉語音，本輪僅字幕');
+      else if(!enabled)callTip(callTtsOn?'尚未完成 '+name+' 語音設定，本輪僅字幕':'已關閉語音，本輪僅字幕');
     }
   }finally{
     if(performanceJob===job){performanceJob=null;segmentCaption(job,'');}
@@ -753,6 +755,9 @@ try{
       }
       // Never attach stale choreography to text modified by the chat parser.
       choice=null;
+    }
+    if(window.XaSpeechInput?.elevenConfig()&&text){
+      return performSpeechPlan(text,{parts:[{text,choice}]}).catch(e=>{console.warn('ElevenLabs call speech',e);});
     }
     cancelPerformance();
     const p=panel,session=callLog;

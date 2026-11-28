@@ -50,13 +50,20 @@ final class SpeechInput {
     private static final String[] PROVIDER_NAMES={"請選擇供應商","OpenAI 相容接口","騰訊雲","ElevenLabs"};
     private static final String[] LABELS={"自動辨識","粵語（香港／澳門）","普通話","英文"};
     private static final String[] LANGS={"","yue","zho","eng"};
+    private static final String[] SCRIBE_MODELS={"scribe_v3_live","scribe_v3","scribe_v2_realtime","scribe_v2"};
+    private static final String[] SCRIBE_LABELS={"Scribe v3 Live · 即時辨識","Scribe v3 · 錄音轉寫",
+        "Scribe v2 Realtime · 即時辨識","Scribe v2 · 錄音轉寫"};
+    private static final int DEFAULT_SCRIBE=3;
     private static final int LIMIT_MS=120000;
     private final Activity host;
     private final SharedPreferences prefs;
     private final ExecutorService io=Executors.newSingleThreadExecutor();
+    private final ExecutorService voiceIo=Executors.newFixedThreadPool(2);
     private final Handler ui=new Handler(Looper.getMainLooper());
     private Request active;
     private MediaRecorder recorder;
+    private ElevenRealtimeInput realtime;
+    private AlertDialog keyDialog;
     private File audio;
     private AlertDialog dialog;
     private boolean waitingPermission, uploading, closed;
@@ -73,6 +80,8 @@ final class SpeechInput {
             this.provider=provider;this.key=key;this.address=address;this.model=model;this.secretId=secretId;this.language=language;
         }
         String name(){return PROVIDER_NAMES[provider];}
+        boolean realtime(){return provider==3&&(model.equals(SCRIBE_MODELS[0])||model.equals(SCRIBE_MODELS[2]));}
+        String batchModel(){return model.equals(SCRIBE_MODELS[0])||model.equals(SCRIBE_MODELS[1])?"scribe_v3":"scribe_v2";}
         int limitMs(){return provider==2?59000:LIMIT_MS;}
         void validate() throws Exception{
             if(provider==0)throw new IOException("請選擇辨識接口");
@@ -96,6 +105,13 @@ final class SpeechInput {
                 JSONObject request=new JSONObject(raw);id=request.getString("id");
                 if(id.length()>100)return;
                 String action=request.optString("action");
+                if("elevenStatus".equals(action)){
+                    reply(reply,id,PhoneService.json("ok",true,"configured",validCredential(readConfig(3).key)));return;
+                }
+                if("elevenKey".equals(action)){showElevenKey(reply,id);return;}
+                if("elevenVoices".equals(action)||"elevenSpeak".equals(action)){
+                    requestEleven(reply,id,action,request);return;
+                }
                 if("copy".equals(action)){
                     String value=request.optString("text");
                     if(value.length()>20000)throw new IOException("文字太長");
@@ -106,7 +122,9 @@ final class SpeechInput {
                 }
                 int selected=providerIndex();
                 if("status".equals(action)){
-                    reply(reply,id,PhoneService.json("ok",true,"provider",selected==0?"":PROVIDER_NAMES[selected]));return;
+                    String label=selected==0?"":PROVIDER_NAMES[selected];
+                    if(selected==3)label+=" · "+SCRIBE_LABELS[scribeIndex(readConfig(3).model)];
+                    reply(reply,id,PhoneService.json("ok",true,"provider",label));return;
                 }
                 if("cancelCall".equals(action)){
                     if(active!=null&&active.call)cancelCall();
@@ -137,6 +155,7 @@ final class SpeechInput {
         try{proxy.postMessage(PhoneService.json("id",id,"result",result).toString());}catch(RuntimeException ignored){}
     }
     private void finish(JSONObject result){
+        if(realtime!=null){realtime.cancel();realtime=null;}
         Request req=active;active=null;dialog=null;waitingPermission=false;uploading=false;
         if(req!=null)reply(req.reply,req.id,result);
     }
@@ -150,9 +169,15 @@ final class SpeechInput {
         String prefix=PROVIDERS[provider]+".";
         String oldKey=provider==3?prefs.getString("key",""):"";
         int oldLanguage=provider==3?prefs.getInt("language",0):0;
+        String model=prefs.getString(prefix+"model","");
+        if(provider==3)model=SCRIBE_MODELS[scribeIndex(model)];
         return new Config(provider,prefs.getString(prefix+"key",oldKey),prefs.getString(prefix+"address",""),
-            prefs.getString(prefix+"model",""),prefs.getString(prefix+"secretId",""),
+            model,prefs.getString(prefix+"secretId",""),
             Math.max(0,Math.min(LANGS.length-1,prefs.getInt(prefix+"language",oldLanguage))));
+    }
+    private static int scribeIndex(String model){
+        for(int i=0;i<SCRIBE_MODELS.length;i++)if(SCRIBE_MODELS[i].equals(model))return i;
+        return DEFAULT_SCRIBE;
     }
     private static boolean validCredential(String value){
         return !value.isEmpty()&&value.length()<=512&&value.matches("[!-~]+");
@@ -170,6 +195,43 @@ final class SpeechInput {
         field.setInputType(InputType.TYPE_CLASS_TEXT|(secret?InputType.TYPE_TEXT_VARIATION_PASSWORD:InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS));
         return field;
     }
+    private void showElevenKey(JavaScriptReplyProxy proxy,String id){
+        if(keyDialog!=null){reply(proxy,id,PhoneService.json("ok",false,"why","ElevenLabs 設定已開啟"));return;}
+        EditText key=textField("ElevenLabs API Key",true);
+        key.setText(readConfig(3).key);
+        keyDialog=new AlertDialog.Builder(host).setTitle("ElevenLabs 共用金鑰")
+            .setMessage("語音轉文字和文字轉語音共用此金鑰。")
+            .setView(key).setPositiveButton("保存",null).setNegativeButton("取消",null)
+            .setOnDismissListener(d->{keyDialog=null;reply(proxy,id,PhoneService.json("ok",true));}).create();
+        keyDialog.show();
+        keyDialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+            String value=key.getText().toString().trim();
+            if(!validCredential(value)){key.setError("請輸入有效的 ElevenLabs API Key");return;}
+            prefs.edit().putString("eleven.key",value).apply();
+            keyDialog.dismiss();
+        });
+    }
+    private void requestEleven(JavaScriptReplyProxy proxy,String id,String action,JSONObject request){
+        String key=readConfig(3).key;
+        if(!validCredential(key)){
+            reply(proxy,id,PhoneService.json("ok",false,"why","請先設定 ElevenLabs 共用金鑰"));return;
+        }
+        voiceIo.execute(()->{
+            JSONObject result;
+            try{
+                if("elevenVoices".equals(action)){
+                    result=ElevenVoice.voices(key,request.optString("page"));
+                }else{
+                    byte[] audio=ElevenVoice.synthesize(key,request.optString("model"),request.optString("voice"),
+                        request.optString("text").trim());
+                    result=PhoneService.json("ok",true,"audio",Base64.getEncoder().encodeToString(audio));
+                }
+            }catch(IOException e){result=PhoneService.json("ok",false,"why",e.getMessage());}
+            catch(Exception e){result=PhoneService.json("ok",false,"why","ElevenLabs 服務未返回可用結果");}
+            JSONObject out=result;
+            ui.post(()->reply(proxy,id,out));
+        });
+    }
     private void showSettings(){
         ScrollView scroll=new ScrollView(host);
         LinearLayout box=new LinearLayout(host);box.setOrientation(LinearLayout.VERTICAL);
@@ -184,6 +246,7 @@ final class SpeechInput {
         EditText secretId=textField("騰訊雲 SecretId",false);
         EditText key=textField("API Key",true);
         box.addView(address);box.addView(model);box.addView(secretId);box.addView(key);
+        Spinner scribe=choices(SCRIBE_LABELS);scribe.setContentDescription("ElevenLabs 辨識模型");box.addView(scribe);
         Spinner language=choices(LABELS);language.setContentDescription("辨識語言");box.addView(language);
         TextView status=new TextView(host);box.addView(status);
         provider.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){
@@ -194,10 +257,13 @@ final class SpeechInput {
                 secretId.setVisibility(selected==2?View.VISIBLE:View.GONE);secretId.setText(saved.secretId);
                 key.setVisibility(selected==0?View.GONE:View.VISIBLE);key.setText(saved.key);
                 key.setHint(selected==2?"騰訊雲 SecretKey":"API Key");
+                scribe.setVisibility(selected==3?View.VISIBLE:View.GONE);
+                scribe.setSelection(scribeIndex(saved.model));
                 language.setVisibility(selected==0?View.GONE:View.VISIBLE);
                 language.setSelection(saved.language);
                 status.setText(selected==1?"接口需支援 /audio/transcriptions。選粵語時由接口自動辨識。"
-                    :selected==2?"粵語可選專用模型，自動模式支援中英粵混說。":"");
+                    :selected==2?"粵語可選專用模型，自動模式支援中英粵混說。"
+                    :selected==3?"即時模型適用於電話與視訊。聊天錄音使用同版本的錄音轉寫。":"");
             }
             @Override public void onNothingSelected(AdapterView<?> parent){}
         });
@@ -223,7 +289,8 @@ final class SpeechInput {
                 dialog.dismiss();finish(PhoneService.json("ok",true));return;
             }
             Config config=new Config(selected,key.getText().toString().trim(),address.getText().toString().trim(),
-                model.getText().toString().trim(),secretId.getText().toString().trim(),language.getSelectedItemPosition());
+                selected==3?SCRIBE_MODELS[scribe.getSelectedItemPosition()]:model.getText().toString().trim(),
+                secretId.getText().toString().trim(),language.getSelectedItemPosition());
             try{config.validate();}
             catch(Exception e){status.setText(e.getMessage());return;}
             String prefix=PROVIDERS[selected]+".";
@@ -241,6 +308,16 @@ final class SpeechInput {
     }
     @SuppressWarnings("deprecation") private void startRecording(){
         try{
+            if(active.call&&active.config.realtime()){
+                Request req=active;
+                realtime=new ElevenRealtimeInput(result->ui.post(()->{
+                    if(active==req&&!req.cancelled)finish(result);
+                }),text->ui.post(()->{
+                    if(active==req&&!req.cancelled)reply(req.reply,req.id,PhoneService.json("partial",text));
+                }));
+                realtime.start(req.config.key,req.config.model,LANGS[req.config.language]);
+                return;
+            }
             audio=File.createTempFile("xa-stt-",".m4a",host.getCacheDir());
             recorder=new MediaRecorder();recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
             recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
@@ -379,7 +456,7 @@ final class SpeechInput {
         conn.setRequestProperty("Content-Type","multipart/form-data; boundary="+boundary);
         ByteArrayOutputStream headers=new ByteArrayOutputStream();
         if(eleven){
-            field(headers,boundary,"model_id","scribe_v2");
+            field(headers,boundary,"model_id",config.batchModel());
             if(config.language!=0)field(headers,boundary,"language_code",LANGS[config.language]);
             field(headers,boundary,"tag_audio_events","false");
             field(headers,boundary,"timestamps_granularity","none");
@@ -439,8 +516,10 @@ final class SpeechInput {
     void onPause(){if(active!=null&&active.call&&!waitingPermission)cancelCall();else if(recorder!=null||audio!=null)discard("已離開錄音畫面，未傳送音訊");}
     void close(){
         closed=true;ui.removeCallbacks(limit);releaseRecorder(false);deleteAudio();
+        if(realtime!=null){realtime.cancel();realtime=null;}
+        if(keyDialog!=null){keyDialog.dismiss();keyDialog=null;}
         if(dialog!=null){dialog.dismiss();dialog=null;}
         HttpsURLConnection c=connection;if(c!=null)c.disconnect();
-        io.shutdownNow();active=null;
+        io.shutdownNow();voiceIo.shutdownNow();active=null;
     }
 }

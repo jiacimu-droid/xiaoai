@@ -35,7 +35,11 @@ test('only actual audio completion advances to the next segment; cancellation re
     pause(){this.emit('pause');}
   }
   const setup=`let performanceJob=null,callAudio=null,callSpeechRequest=0,callPhase='connected',callTtsOn=true;const speechMotions=new WeakMap();function callTip(){}function callTipClear(){}function callStopAudio(){cancelPerformance();callSpeechRequest++;if(callAudio){callAudio.pause();callAudio=null;}}`;
-  const api=new Function('callLog','panel','Audio','URL','DB','minimaxSpeak','watchMedia','verifiedCue','send','friendly',setup+between('function activeJob(job)','window.XaLive2D={openPreview')+';return {performSpeechPlan,active:()=>!!performanceJob,choice:a=>speechMotions.get(a),stop:callStopAudio};')(log,panel,AudioMock,{revokeObjectURL:u=>revoked.push(u)},{get:()=>({key:'k',group:'g'})},async text=>{spoken.push(text);return 'blob:'+text;},()=>{},()=>null,()=>{},String);
+  const voice={model:'eleven_v4',voice:'selected-voice'};
+  const window={XaSpeechInput:{elevenConfig:()=>voice,elevenSpeak:async(text,config)=>{
+    assert.equal(config,voice);spoken.push(text);return 'blob:'+text;
+  }}};
+  const api=new Function('callLog','panel','Audio','URL','DB','minimaxSpeak','watchMedia','verifiedCue','send','friendly','window',setup+between('function activeJob(job)','window.XaLive2D={openPreview')+';return {performSpeechPlan,active:()=>!!performanceJob,choice:a=>speechMotions.get(a),stop:callStopAudio};')(log,panel,AudioMock,{revokeObjectURL:u=>revoked.push(u)},{get:()=>({key:'k',group:'g'})},()=>assert.fail('used the wrong voice provider'),()=>{},()=>null,()=>{},String,window);
   const flush=async()=>{for(let i=0;i<10;i++)await Promise.resolve();};
   const task=api.performSpeechPlan('first second',{parts});await flush();
   assert.deepEqual(spoken,['first']);assert.equal(api.choice(audioList[0]).id,1);assert.equal(panel.partCaption.textContent,'first');
@@ -57,7 +61,7 @@ test('a rejected playback reports its cause and continues synthesizing later seg
   }
   const setup=`let performanceJob=null,callAudio=null,callSpeechRequest=0,callPhase='connected',callTtsOn=true;const speechMotions=new WeakMap();function callTip(x){tips.push(x);}function callTipClear(){}function callStopAudio(){cancelPerformance();callSpeechRequest++;}`;
   const timers=new Map();let next=0;
-  const api=new Function('callLog','panel','Audio','URL','DB','minimaxSpeak','watchMedia','verifiedCue','send','friendly','tips','setTimeout','clearTimeout','console',setup+between('function activeJob(job)','window.XaLive2D={openPreview')+';return {performSpeechPlan};')(log,panel,AudioMock,{revokeObjectURL:u=>revoked.push(u)},{get:()=>({key:'k',group:'g'})},async text=>{spoken.push(text);return 'blob:'+text;},()=>{},()=>null,()=>{},String,tips,(fn,ms)=>{const id=++next;timers.set(id,{fn,ms});return id;},id=>timers.delete(id),{warn(){}});
+  const api=new Function('callLog','panel','Audio','URL','DB','minimaxSpeak','watchMedia','verifiedCue','send','friendly','tips','setTimeout','clearTimeout','console','window',setup+between('function activeJob(job)','window.XaLive2D={openPreview')+';return {performSpeechPlan};')(log,panel,AudioMock,{revokeObjectURL:u=>revoked.push(u)},{get:()=>({key:'k',group:'g'})},async text=>{spoken.push(text);return 'blob:'+text;},()=>{},()=>null,()=>{},String,tips,(fn,ms)=>{const id=++next;timers.set(id,{fn,ms});return id;},id=>timers.delete(id),{warn(){}},{});
   const flush=async()=>{for(let i=0;i<20;i++)await Promise.resolve();};
   const task=api.performSpeechPlan('first second',{parts:[{text:'first'},{text:'second'}]});
   await flush();
