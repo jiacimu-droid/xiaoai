@@ -1,6 +1,10 @@
 package com.xiaoai.phone;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.ActivityNotFoundException;
+import javax.net.ssl.HttpsURLConnection;
+import java.net.URL;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
@@ -34,6 +38,9 @@ final class Live2DStore {
     private final SharedPreferences prefs;
     private final ExecutorService io=Executors.newSingleThreadExecutor();
     private Pending pending;
+    private boolean installingCore;
+    private static final String CORE_URL="https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js";
+    private static final String LICENSE_URL="https://www.live2d.com/eula/live2d-proprietary-software-license-agreement_cn.html";
     private static final class Pending {
         final String id,role; final int request; final JavaScriptReplyProxy reply;
         Pending(String id,String role,int request,JavaScriptReplyProxy reply){this.id=id;this.role=role;this.request=request;this.reply=reply;}
@@ -58,14 +65,24 @@ final class Live2DStore {
                     io.execute(()->{try{respond(reply,rid,status(role));}catch(Exception e){respond(reply,rid,failure(e));}});
                     return;
                 }
+                if("install_core".equals(action)){
+                    if(pending!=null||installingCore)throw new IOException("已有檔案處理中");
+                    confirmOfficialCore(reply,id,role);return;
+                }
                 int request="pick_model".equals(action)?PICK_MODEL:"pick_core".equals(action)?PICK_CORE:0;
                 if(request==0)throw new IOException("不支援的 Live2D 操作");
-                if(pending!=null)throw new IOException("已有檔案選擇視窗");
+                if(pending!=null||installingCore)throw new IOException("已有檔案處理中");
                 pending=new Pending(id,role,request,reply);
                 try{
                     Intent pick=new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE);
                     pick.setType("*/*");
-                    host.startActivityForResult(pick,request);
+                    pick.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    try{host.startActivityForResult(pick,request);}
+                    catch(ActivityNotFoundException unavailable){
+                        Intent fallback=new Intent(Intent.ACTION_GET_CONTENT).addCategory(Intent.CATEGORY_OPENABLE)
+                            .setType("*/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                        host.startActivityForResult(fallback,request);
+                    }
                 }catch(Exception e){pending=null;throw e;}
             }catch(Exception e){respond(reply,id,failure(e));}
         });
@@ -145,7 +162,44 @@ final class Live2DStore {
     private void importCore(Uri uri)throws Exception{
         InputStream in=host.getContentResolver().openInputStream(uri);
         if(in==null)throw new IOException("讀不到 Cubism Core");
-        byte[] data=bytes(in,8L*1024*1024);
+        saveCore(bytes(in,12L*1024*1024));
+    }
+    private void confirmOfficialCore(JavaScriptReplyProxy reply,String id,String role){
+        installingCore=true;
+        try{
+            new AlertDialog.Builder(host)
+                .setTitle("安裝官方 Cubism Core")
+                .setMessage("將從 Live2D 官方網站下載渲染核心到本機，不會上傳皮套。請先閱讀並同意 Live2D 專有軟體授權協議。")
+                .setNeutralButton("查看授權",(dialog,which)->{
+                    installingCore=false;
+                    try{host.startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(LICENSE_URL)));}catch(Exception ignored){}
+                    respond(reply,id,PhoneService.json("ok",false,"cancelled",true,"why","閱讀授權後可重新安裝"));
+                })
+                .setNegativeButton("取消",(dialog,which)->{
+                    installingCore=false;respond(reply,id,PhoneService.json("ok",false,"cancelled",true,"why","已取消"));
+                })
+                .setOnCancelListener(dialog->{
+                    installingCore=false;respond(reply,id,PhoneService.json("ok",false,"cancelled",true,"why","已取消"));
+                })
+                .setPositiveButton("同意並安裝",(dialog,which)->io.execute(()->{
+                    try{downloadOfficialCore();respond(reply,id,status(role));}
+                    catch(Exception|OutOfMemoryError e){respond(reply,id,failure(e));}
+                    finally{host.runOnUiThread(()->installingCore=false);}
+                })).show();
+        }catch(RuntimeException e){installingCore=false;respond(reply,id,failure(e));}
+    }
+    private void downloadOfficialCore()throws Exception{
+        HttpsURLConnection connection=(HttpsURLConnection)new URL(CORE_URL).openConnection();
+        try{
+            connection.setConnectTimeout(20000);connection.setReadTimeout(45000);
+            connection.setInstanceFollowRedirects(false);
+            int code=connection.getResponseCode();
+            if(code<200||code>=300)throw new IOException("官方 Core 下載失敗（HTTP "+code+"），可改用手動匯入");
+            if(connection.getContentLengthLong()>12L*1024*1024)throw new IOException("官方 Core 檔案過大");
+            saveCore(bytes(connection.getInputStream(),12L*1024*1024));
+        }finally{connection.disconnect();}
+    }
+    private void saveCore(byte[] data)throws Exception{
         if(data.length<1000||!new String(data,StandardCharsets.UTF_8).contains("Live2DCubismCore"))
             throw new IOException("請選擇官方 Cubism SDK for Web 的 live2dcubismcore.min.js");
         File core=new File(root,"core/live2dcubismcore.min.js");
@@ -167,13 +221,15 @@ final class Live2DStore {
                 while((e=zip.getNextEntry())!=null){
                     if(++entries>3000)throw new IOException("ZIP 檔案數量過多");
                     String name=e.getName().replace('\\','/');
+                    while(name.startsWith("./"))name=name.substring(2);
                     while(name.endsWith("/"))name=name.substring(0,name.length()-1);
-                    if(name.startsWith("__MACOSX/")||name.endsWith("/.DS_Store")||name.startsWith("._")){zip.closeEntry();continue;}
+                    if(e.isDirectory()&&(name.isEmpty()||".".equals(name))){zip.closeEntry();continue;}
                     File f=relative(staging,name);
                     if(e.isDirectory()){if(!f.isDirectory()&&!f.mkdirs())throw new IOException("無法建立模型資料夾");}
                     else{
                         if(!seen.add(f.getCanonicalPath()))throw new IOException("ZIP 含重複檔案");
-                        boolean allowed=TYPES.contains(ext(name));
+                        String leaf=f.getName();
+                        boolean allowed=TYPES.contains(ext(name))&&!name.startsWith("__MACOSX/")&&!leaf.startsWith("._");
                         if(allowed&&!f.getParentFile().isDirectory()&&!f.getParentFile().mkdirs())throw new IOException("無法建立模型資料夾");
                         long count=0;int n;
                         try(OutputStream out=allowed?new FileOutputStream(f):null){

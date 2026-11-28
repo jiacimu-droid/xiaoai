@@ -54,7 +54,7 @@ function savedZones(p){
 function mountFrame(p){
   unmountFrame(p);
   if(!p.data?.core||!p.data?.model){
-    p.stage.append(make('div','xa-l2d-empty',!p.data?.core?'請先匯入官方 Cubism Core JS':'請匯入自己的 Live2D ZIP'));
+    p.stage.append(make('div','xa-l2d-empty',!p.data?.core?(p.data?.model?'皮套已保存，尚缺渲染核心。請點官方 Core 一鍵安裝。':'請匯入 Live2D ZIP，並安裝官方 Core。'):'請匯入自己的 Live2D ZIP'));
     return;
   }
   const frame=make('iframe','xa-l2d-frame');
@@ -78,8 +78,8 @@ function controls(p){
 }
 async function loadStatus(p,action='status'){
   if(panel!==p||p.loading)return;
-  p.loading=true;p.status.textContent=action==='status'?'讀取本地皮套…':'等待檔案選擇及校驗…';
-  p.pickModel.disabled=p.pickCore.disabled=true;
+  p.loading=true;p.status.textContent=action==='status'?'讀取本地皮套…':action==='install_core'?'等待授權並下載官方渲染核心…':'等待檔案選擇及校驗…';
+  p.pickModel.disabled=p.pickCore.disabled=p.installCore.disabled=true;
   try{
     const result=await rpc(action,p.role);
     if(panel!==p)return;
@@ -89,11 +89,11 @@ async function loadStatus(p,action='status'){
       return;
     }
     const old=p.data;p.data=result;
-    p.status.textContent=(result.label||'未匯入皮套')+' · '+result.motions.length+' 動作 · '+result.expressions.length+' 表情';
+    p.status.textContent=(result.model?(action==='pick_model'?'皮套已匯入 · ':'')+result.label:'未匯入皮套')+' · '+result.motions.length+' 動作 · '+result.expressions.length+' 表情 · '+(result.core?'Core 已安裝':'尚缺 Core，請點官方一鍵安裝');
     if(!old||action!=='status'||old.model!==result.model||old.core!==result.core)mountFrame(p);
     controls(p);
   }catch(e){if(panel===p)p.status.textContent=String(e.message||e);}
-  finally{p.loading=false;p.pickModel.disabled=p.pickCore.disabled=false;}
+  finally{p.loading=false;p.pickModel.disabled=p.pickCore.disabled=p.installCore.disabled=false;}
 }
 function selectedMotion(p){
   try{
@@ -213,14 +213,15 @@ function open(kind,c){
       let chosen=null;try{chosen=(chars||[]).find(x=>roleKey(x)===wanted)||null;}catch(_){}
       open('preview',chosen);
     };
-    root.append(sel);
+    root.append(sel,make('div','xa-l2d-status','獨立檢驗不會改動聊天角色；如要直接綁定，請先在上方選擇好友，再匯入 ZIP。'));
   }
   const stage=make('div','xa-l2d-stage');p.stage=stage;root.append(stage);
   const status=make('div','xa-l2d-status','讀取本地皮套…');p.status=status;root.append(status);
   const toolbar=make('div','xa-l2d-tools');
   p.pickModel=btn('匯入 ZIP',()=>loadStatus(p,'pick_model'));
-  p.pickCore=btn('官方 Core JS',()=>loadStatus(p,'pick_core'));
-  toolbar.append(p.pickModel,p.pickCore);
+  p.installCore=btn('官方 Core 一鍵安裝',()=>loadStatus(p,'install_core'));
+  p.pickCore=btn('手動匯入 Core JS',()=>loadStatus(p,'pick_core'));
+  toolbar.append(p.pickModel,p.installCore,p.pickCore);
   if(kind==='chat')toolbar.append(btn('視訊通話',()=>{
     const char=currentRole();if(!char||char.blocked)return toastLocal('此好友不可通話');
     close();callOpen(char,'outgoing');open('call',char);
