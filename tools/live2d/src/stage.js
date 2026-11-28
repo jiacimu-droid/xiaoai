@@ -1047,6 +1047,8 @@ async function load(modelURL) {
     const available = [...new Set(candidates)].filter(id =>
       hasParameter(coreModel, id))
     notify('parameters', available.join(','))
+    // Web host receives only capability IDs verified against the loaded Moc3.
+    window.dispatchEvent(new CustomEvent('xa-live2d-capabilities',{detail:{parameters:available}}))
     notify('diagnostic', '真实 Moc3 口型索引=' + cubismParameters.index(coreModel, 'ParamMouthOpenY') +
       '；头部X索引=' + cubismParameters.index(coreModel, 'ParamAngleX') +
       '；已绑定最终绘制前参数控制')
