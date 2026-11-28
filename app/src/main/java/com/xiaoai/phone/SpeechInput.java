@@ -144,7 +144,8 @@ final class SpeechInput {
             releaseRecorder(false);deleteAudio();finish(PhoneService.json("ok",false,"why","無法啟動麥克風，請檢查權限或是否被其他 App 使用"));
         }
     }
-    private final Runnable limit=()->{
+    private final Runnable limit=this::onLimit;
+    private void onLimit(){
         if(recorder==null)return;
         boolean ok=releaseRecorder(true);
         if(dialog!=null)dialog.dismiss();
@@ -153,7 +154,7 @@ final class SpeechInput {
             .setPositiveButton("轉寫",(d,w)->submitRecording())
             .setNegativeButton("取消",(d,w)->discard("已取消錄音"))
             .setOnCancelListener(d->discard("已取消錄音")).create();dialog.show();
-    };
+    }
     private boolean releaseRecorder(boolean stop){
         ui.removeCallbacks(limit);MediaRecorder r=recorder;recorder=null;
         if(r==null)return true;
