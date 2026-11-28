@@ -166,8 +166,9 @@ function watchMedia(p,media){
     if(panel!==p||p.media!==media||p.speaking)return;
     p.speaking=true;p.speechSequence=++seq;
     speechEnvelope(media);
-    const cue=verifiedCue(p,speechMotions.get(media));
-    if(cue)send(p,'perform',{cue:{...cue,visualSequence:p.speechSequence}});
+    const choice=speechMotions.get(media);
+    const cue=verifiedCue(p,choice);
+    if(cue){p.pendingVisual=null;send(p,'perform',{cue:{...cue,visualSequence:p.speechSequence}});}
     send(p,'event',{event:'playing',sequence:p.speechSequence});
   };
   const finish=event=>{
@@ -193,7 +194,14 @@ function tick(p){
   if(p.ready){
     const listening=p.kind==='call'&&document.getElementById('xaCallSttStatus')?.textContent.startsWith('麥克風收音中')===true&&!thinking&&!p.speaking;
     send(p,'update',{state:{speaking:!!p.speaking,thinking,listening,...mouthState(p)}});
-    if(p.kind==='call')dispatchTouchTurn(p);
+    if(p.kind==='call'){
+      const pending=p.pendingVisual,last=callLog[callLog.length-1];
+      if(pending&&(pending.session!==callLog||Date.now()>pending.expires))p.pendingVisual=null;
+      else if(pending&&!callAudio&&!callBusy&&last?.role==='sys'&&/語音失敗|語音放不出來/.test(last.text)){
+        p.pendingVisual=null;const cue=verifiedCue(p,pending.choice);if(cue)send(p,'perform',{cue,immediate:true});
+      }
+      dispatchTouchTurn(p);
+    }
   }
 }
 function touchMode(p){
@@ -231,7 +239,7 @@ function acceptTouch(p,d){
   p.touchDue=Date.now()+900;
 }
 function dispatchTouchTurn(p){
-  if(!p.touchEvents?.length||!p.touchDue||Date.now()<p.touchDue||p.session!==callLog||callPhase!=='connected'||callBusy||callAudio)return;
+  if(!p.touchEvents?.length||!p.touchDue||Date.now()<p.touchDue||p.session!==callLog||callPhase!=='connected'||callBusy||callAudio||document.hidden)return;
   const last=callLog[callLog.length-1];
   if(last?.role==='sys'&&last.text==='正在用 MiniMax 合成語音…')return;
   const input=document.getElementById('callInp');
@@ -357,7 +365,11 @@ window.addEventListener('message',event=>{
       p.fallback.hidden=p.ready;
       p.stage.style.visibility=p.ready?'visible':'hidden';
       p.interaction.hidden=!p.ready;
-      if(p.ready&&p.speaking)send(p,'event',{event:'playing',sequence:p.speechSequence});
+      if(p.ready&&p.speaking){
+        const cue=verifiedCue(p,speechMotions.get(p.media));
+        if(cue)send(p,'perform',{cue:{...cue,visualSequence:p.speechSequence}});
+        send(p,'event',{event:'playing',sequence:p.speechSequence});
+      }
       if(!p.ready&&d.phase==='error')p.status.textContent='皮套無法顯示，請在 Live2D 檢驗確認';
     }
     controls(p);
@@ -484,6 +496,16 @@ function install(){
     };
   }catch(e){console.warn('Live2D desktop',e);}
 }
-window.XaLive2D={openPreview:()=>open('preview',null),closeIfOpen:close,syncCall,callMotionOptions,playSilentMotion:choice=>{if(panel?.kind==='call'&&panel.ready){const cue=verifiedCue(panel,choice);if(cue)send(panel,'perform',{cue,immediate:true});}},setSpeechMotion:(audio,motion)=>speechMotions.set(audio,motion)};
+window.XaLive2D={openPreview:()=>open('preview',null),closeIfOpen:close,syncCall,callMotionOptions,playSilentMotion:choice=>{if(panel?.kind==='call'&&panel.ready){panel.pendingVisual=null;const cue=verifiedCue(panel,choice);if(cue)send(panel,'perform',{cue,immediate:true});}},setSpeechMotion:(audio,motion)=>speechMotions.set(audio,motion)};
+// If audio synthesis/playback fails, preserve the role's selected visual beat
+// in the same call, without issuing another model request.
+try{
+  const speak=callSpeak;
+  callSpeak=function(text,choice){
+    const p=panel,session=callLog;
+    if(p?.kind==='call'&&choice){p.pendingVisual={choice,session,expires:Date.now()+90000};}
+    return speak.apply(this,arguments);
+  };
+}catch(e){console.warn('Live2D speech fallback',e);}
 install();
 })();
