@@ -24,7 +24,10 @@
     switch(d.type){
       case 'init':
         if(typeof d.model!=='string'||!d.model.startsWith(STAGE+'/private/models/'))return
-        initial=d;window.__luluStageModelUrl=d.model;viewport()
+        initial=d;window.__luluStageModelUrl=d.model
+        window.__luluFramingMode=d.framing==='call'?'call':'full'
+        call('setFramingMode',window.__luluFramingMode)
+        viewport()
         if(window.LuluLive2D)call('load',d.model)
         break
       case 'update':call('update',d.state);break

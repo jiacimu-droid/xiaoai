@@ -58,7 +58,7 @@ function mountFrame(p){
   unmountFrame(p);
   if(!p.data?.core||!p.data?.model){
     if(p.kind==='call'){
-      p.status.textContent=p.data?.model?'請先在聊天的 Live2D 面板安裝官方 Core':'請先在聊天的 Live2D 面板匯入這位好友的皮套';
+      p.status.textContent=p.data?.model?'請先到角色設定的 Live2D 皮套管理安裝官方 Core':'請先到角色設定的 Live2D 皮套管理匯入這位好友的皮套';
       return;
     }
     p.stage.append(make('div','xa-l2d-empty',!p.data?.core?(p.data?.model?'皮套已保存，尚缺渲染核心。請點官方 Core 一鍵安裝。':'請匯入 Live2D ZIP，並安裝官方 Core。'):'請匯入自己的 Live2D ZIP'));
@@ -67,7 +67,7 @@ function mountFrame(p){
   const frame=make('iframe','xa-l2d-frame');
   frame.title='Live2D';frame.setAttribute('sandbox','allow-scripts allow-same-origin');frame.referrerPolicy='no-referrer';
   p.frame=frame;
-  frame.addEventListener('load',()=>{if(panel===p&&p.frame===frame)send(p,'init',{model:p.data.model,calibration:savedZones(p),mode:p.mode});});
+  frame.addEventListener('load',()=>{if(panel===p&&p.frame===frame)send(p,'init',{model:p.data.model,calibration:savedZones(p),mode:p.mode,framing:p.kind==='call'?'call':'full'});});
   frame.src=STAGE+'/assets/live2d/stage.html';
   p.stage.append(frame);
   p.status.textContent='正在載入模型…';
@@ -340,7 +340,7 @@ function callMotionOptions(){
   };
 }
 const style=make('style');
-style.textContent='.xa-l2d{box-sizing:border-box;display:flex;flex-direction:column;gap:6px;padding:8px;color:var(--ink,#333);background:var(--paper,#faf7f3);border:1px solid var(--line,#ddd);border-radius:14px;min-height:0;flex-shrink:0}.xa-l2d-full{position:fixed;inset:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px);z-index:99999;border-radius:0;padding:12px}.xa-l2d-inline{margin:4px 8px}.xa-l2d-bar,.xa-l2d-tools{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.xa-l2d-bar strong{flex:1}.xa-l2d-stage{position:relative;min-height:140px;height:180px;overflow:hidden;background:#e9edf4;border-radius:11px;flex-shrink:0}.xa-l2d-full .xa-l2d-stage{height:auto;flex:1;min-height:150px}.xa-l2d-frame{width:100%;height:100%;border:0;display:block}.xa-l2d-empty{height:100%;display:grid;place-items:center;text-align:center;color:#596470;font-size:13px;padding:14px}.xa-l2d-btn,.xa-l2d-select{font:inherit;font-size:12px;min-height:32px;border:1px solid var(--line,#ccc);color:inherit;background:var(--paper,#fff);border-radius:9px;padding:4px 8px;max-width:100%}.xa-l2d-status{font-size:11px;color:inherit;opacity:.8;overflow-wrap:anywhere}.xa-l2d-tools select{flex:1;min-width:60px}.xa-l2d-chat{border:0;background:none;color:inherit;font-size:11px;min-width:40px;padding:6px}.xa-l2d-chat svg{display:block;width:19px;height:19px;margin:auto}';
+style.textContent='.xa-l2d{box-sizing:border-box;display:flex;flex-direction:column;gap:6px;padding:8px;color:var(--ink,#333);background:var(--paper,#faf7f3);border:1px solid var(--line,#ddd);border-radius:14px;min-height:0;flex-shrink:0}.xa-l2d-full{position:fixed;inset:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px);z-index:99999;border-radius:0;padding:12px}.xa-l2d-inline{margin:4px 8px}.xa-l2d-bar,.xa-l2d-tools{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.xa-l2d-bar strong{flex:1}.xa-l2d-stage{position:relative;min-height:140px;height:180px;overflow:hidden;background:#e9edf4;border-radius:11px;flex-shrink:0}.xa-l2d-full .xa-l2d-stage{height:auto;flex:1;min-height:150px}.xa-l2d-frame{width:100%;height:100%;border:0;display:block}.xa-l2d-empty{height:100%;display:grid;place-items:center;text-align:center;color:#596470;font-size:13px;padding:14px}.xa-l2d-btn,.xa-l2d-select{font:inherit;font-size:12px;min-height:32px;border:1px solid var(--line,#ccc);color:inherit;background:var(--paper,#fff);border-radius:9px;padding:4px 8px;max-width:100%}.xa-l2d-status{font-size:11px;color:inherit;opacity:.8;overflow-wrap:anywhere}.xa-l2d-tools select{flex:1;min-width:60px}';
 style.textContent+=`
 #callOverlay .xa-l2d-call-toggle {position:absolute;right:12px;top:7px;z-index:7;min-height:36px;padding:0 10px;border:1px solid currentColor;border-radius:18px;background:var(--ovbg);color:inherit;font:inherit;font-size:12px;cursor:pointer}
 #callOverlay[data-live2d] {overflow:hidden}
@@ -381,10 +381,23 @@ function install(){
     toggle.id='xaLive2DCallToggle';toggle.className='xa-l2d-call-toggle';toggle.hidden=true;
     overlay.append(toggle);
   }
-  const header=document.getElementById('chatHeader');
-  if(header&&!document.getElementById('xaLive2DChat')){
-    const b=btn('Live2D',()=>open('chat',currentRole()));b.id='xaLive2DChat';b.className='xa-l2d-chat';
-    b.innerHTML=icon+'Live2D';header.insertBefore(b,header.querySelector('.chat-more-btn'));
+  const extra=document.getElementById('extra');
+  const voiceCall=extra?.querySelector('[onclick="startCall()"]');
+  if(voiceCall){
+    const video=btn('',()=>{
+      const char=currentRole();if(!char||char.blocked)return toastLocal('此好友不可通話');
+      extra.classList.remove('open');
+      close();callOpen(char,'outgoing',true);
+    });
+    video.className='ex';video.style.cssText='border:0;background:none;font-family:inherit';
+    video.innerHTML='<span class="exic" aria-hidden="true">📹</span><span>視訊通話</span>';
+    voiceCall.after(video);
+  }
+  const roleSettings=document.getElementById('tabContentInfo');
+  if(roleSettings){
+    const manage=btn('管理 Live2D 皮套',()=>{closeDrawer();open('chat',currentRole());});
+    manage.className='btn full ghost';manage.style.marginBottom='10px';
+    roleSettings.lastElementChild.before(manage);
   }
   try{
     APP_INFO_MAP.live2d={name:'Live2D',iconSvg:icon};

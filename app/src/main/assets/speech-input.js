@@ -22,7 +22,7 @@ function visible(el){return !!el&&el.getClientRects().length>0&&!el.disabled&&!e
 function composer(){
   const chat=document.getElementById('chat');
   if(!chat||!chat.classList.contains('on'))return null;
-  const fields=[...chat.querySelectorAll('textarea, [contenteditable="true"][role="textbox"]')].filter(visible);
+  const fields=[chat.querySelector('#inbar #inp')].filter(visible);
   return fields.length===1?fields[0]:null;
 }
 function insert(el,value){
@@ -59,19 +59,43 @@ function preview(value,originalRole){
 async function record(b){
   if(busy)return;
   busy=true;b.disabled=true;const originalRole=role();
-  const caption=b.textContent;b.textContent='辨識中…';
+  const label=b.lastElementChild;const caption=label.textContent;label.textContent='辨識中…';
   try{
     const result=await rpc('record');
-    if(result?.ok)preview(String(result.text||''),originalRole);
+    if(result?.needsSettings)window.alert('請先到「設定 → 語音轉文字」選擇並保存辨識接口。');
+    else if(result?.ok)preview(String(result.text||''),originalRole);
     else if(!result?.cancelled)window.alert(result?.why||'語音辨識失敗');
   }catch(e){window.alert(String(e.message||e));}
-  finally{busy=false;b.disabled=false;b.textContent=caption;}
+  finally{busy=false;b.disabled=false;label.textContent=caption;}
 }
 function install(){
-  const header=document.getElementById('chatHeader');if(!header||document.getElementById('xaSttButton'))return;
-  const b=button('語音轉文字',()=>record(b));b.id='xaSttButton';
-  b.style.cssText='font:inherit;font-size:11px;border:0;background:none;color:inherit;padding:6px;min-width:44px';
-  header.insertBefore(b,header.querySelector('.chat-more-btn'));
+  const apiList=document.getElementById('apiList');
+  if(apiList&&!document.getElementById('xaSttSettings')){
+    const block=document.createElement('section');block.id='xaSttSettings';block.style.margin='16px 0';
+    const title=document.createElement('div');title.className='lbl';title.textContent='語音轉文字';
+    const status=document.createElement('div');status.className='set-s';status.style.margin='4px 0 8px';
+    async function refresh(){
+      try{const result=await rpc('status');status.textContent=result?.provider||'尚未選擇辨識接口';}
+      catch(e){status.textContent=e.message;}
+    }
+    const settings=button('配置辨識接口',async()=>{
+      try{const result=await rpc('settings');if(!result?.ok&&!result?.cancelled)window.alert(result?.why||'無法開啟設定');}
+      catch(e){window.alert(e.message);}
+      await refresh();
+    });
+    settings.className='btn full ghost';
+    block.append(title,status,settings);apiList.after(block);refresh();
+  }
+  const extra=document.getElementById('extra');
+  if(!extra||document.getElementById('xaSttButton'))return;
+  const b=button('',()=>{
+    extra.classList.remove('open');
+    record(b);
+  });
+  b.id='xaSttButton';b.className='ex';b.setAttribute('aria-label','語音轉文字');
+  b.innerHTML='<span class="exic" aria-hidden="true">🎙️</span><span>語音轉文字</span>';
+  b.style.cssText='border:0;background:none;font-family:inherit';
+  extra.firstElementChild.after(b);
 }
 install();
 })();

@@ -18,22 +18,36 @@ import android.widget.LinearLayout;
 import android.widget.Spinner;
 import android.widget.ArrayAdapter;
 import android.widget.TextView;
+import android.widget.ScrollView;
+import android.widget.AdapterView;
+import android.view.View;
 import androidx.webkit.JavaScriptReplyProxy;
 import androidx.webkit.WebViewCompat;
 import org.json.JSONObject;
 import java.io.*;
 import java.net.URL;
+import java.net.URI;
+import java.nio.file.Files;
+import java.security.MessageDigest;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.Base64;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import javax.net.ssl.HttpsURLConnection;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 
 /** Explicit, local microphone capture; only confirmed recordings go to the selected STT API. */
 final class SpeechInput {
     private static final int PERMISSION=8640;
-    private static final String ENDPOINT="https://api.elevenlabs.io/v1/speech-to-text";
+    private static final String ELEVEN_ENDPOINT="https://api.elevenlabs.io/v1/speech-to-text";
+    private static final String TENCENT_HOST="asr.tencentcloudapi.com";
+    private static final String[] PROVIDERS={"","compatible","tencent","eleven"};
+    private static final String[] PROVIDER_NAMES={"請選擇供應商","OpenAI 相容接口","騰訊雲","ElevenLabs"};
     private static final String[] LABELS={"自動辨識","粵語（香港／澳門）","普通話","英文"};
     private static final String[] LANGS={"","yue","zho","eng"};
     private static final int LIMIT_MS=120000;
@@ -48,8 +62,27 @@ final class SpeechInput {
     private boolean waitingPermission, uploading, closed;
     private volatile HttpsURLConnection connection;
     private static final class Request {
-        final String id; final JavaScriptReplyProxy reply; String key,lang;
+        final String id; final JavaScriptReplyProxy reply; Config config;
         Request(String id,JavaScriptReplyProxy reply){this.id=id;this.reply=reply;}
+    }
+    private static final class Config {
+        final int provider;
+        final String key,address,model,secretId;
+        final int language;
+        Config(int provider,String key,String address,String model,String secretId,int language){
+            this.provider=provider;this.key=key;this.address=address;this.model=model;this.secretId=secretId;this.language=language;
+        }
+        String name(){return PROVIDER_NAMES[provider];}
+        int limitMs(){return provider==2?59000:LIMIT_MS;}
+        void validate() throws Exception{
+            if(provider==0)throw new IOException("請選擇辨識接口");
+            if(!validCredential(key))throw new IOException("請輸入有效的 API Key 或 SecretKey");
+            if(provider==2&&!secretId.matches("[A-Za-z0-9]+"))throw new IOException("請輸入有效的騰訊雲 SecretId");
+            if(provider==1){
+                transcriptionEndpoint(address);
+                if(model.isEmpty()||model.length()>128||model.indexOf('\n')>=0||model.indexOf('\r')>=0)throw new IOException("請填寫轉寫模型名稱");
+            }
+        }
     }
     SpeechInput(Activity host){
         this.host=host;prefs=host.getSharedPreferences("xa_stt_v1",Context.MODE_PRIVATE);
@@ -71,11 +104,23 @@ final class SpeechInput {
                     clipboard.setPrimaryClip(ClipData.newPlainText("語音轉文字",value));
                     reply(reply,id,PhoneService.json("ok",true));return;
                 }
-                if(!"record".equals(action))throw new IOException("不支援的語音操作");
+                int selected=providerIndex();
+                if("status".equals(action)){
+                    reply(reply,id,PhoneService.json("ok",true,"provider",selected==0?"":PROVIDER_NAMES[selected]));return;
+                }
+                if(!"record".equals(action)&&!"settings".equals(action))throw new IOException("不支援的語音操作");
                 if(active!=null)throw new IOException("已有語音辨識工作進行中");
-                active=new Request(id,reply);showSettings();
+                active=new Request(id,reply);
+                if("settings".equals(action)){showSettings();return;}
+                Config config=readConfig(selected);
+                try{config.validate();}
+                catch(Exception invalid){finish(PhoneService.json("ok",false,"needsSettings",true,"why",invalid.getMessage()));return;}
+                active.config=config;
+                if(host.checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){
+                    waitingPermission=true;host.requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO},PERMISSION);
+                }else startRecording();
             }catch(Exception e){
-                if(active!=null&&active.id.equals(id))finish(PhoneService.json("ok",false,"why","無法開啟語音設定"));
+                if(active!=null&&active.id.equals(id))finish(PhoneService.json("ok",false,"why","無法開啟語音功能"));
                 else reply(reply,id,PhoneService.json("ok",false,"why",e.getMessage()));
             }
         });
@@ -88,37 +133,100 @@ final class SpeechInput {
         try{proxy.postMessage(PhoneService.json("id",id,"result",result).toString());}catch(RuntimeException ignored){}
     }
     private void finish(JSONObject result){
-        Request req=active;active=null;waitingPermission=false;uploading=false;
+        Request req=active;active=null;dialog=null;waitingPermission=false;uploading=false;
         if(req!=null)reply(req.reply,req.id,result);
     }
     private void cancelled(String reason){finish(PhoneService.json("ok",false,"cancelled",true,"why",reason));}
+    private int providerIndex(){
+        String activeProvider=prefs.getString("provider","");
+        for(int i=1;i<PROVIDERS.length;i++)if(PROVIDERS[i].equals(activeProvider))return i;
+        return 0;
+    }
+    private Config readConfig(int provider){
+        String prefix=PROVIDERS[provider]+".";
+        String oldKey=provider==3?prefs.getString("key",""):"";
+        int oldLanguage=provider==3?prefs.getInt("language",0):0;
+        return new Config(provider,prefs.getString(prefix+"key",oldKey),prefs.getString(prefix+"address",""),
+            prefs.getString(prefix+"model",""),prefs.getString(prefix+"secretId",""),
+            Math.max(0,Math.min(LANGS.length-1,prefs.getInt(prefix+"language",oldLanguage))));
+    }
+    private static boolean validCredential(String value){
+        return !value.isEmpty()&&value.length()<=512&&value.matches("[!-~]+");
+    }
+    private Spinner choices(String[] labels){
+        Spinner field=new Spinner(host);
+        ArrayAdapter<String> adapter=new ArrayAdapter<>(host,android.R.layout.simple_spinner_item,labels);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        field.setAdapter(adapter);
+        return field;
+    }
+    private EditText textField(String hint,boolean secret){
+        EditText field=new EditText(host);
+        field.setSingleLine(true);field.setHint(hint);
+        field.setInputType(InputType.TYPE_CLASS_TEXT|(secret?InputType.TYPE_TEXT_VARIATION_PASSWORD:InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS));
+        return field;
+    }
     private void showSettings(){
+        ScrollView scroll=new ScrollView(host);
         LinearLayout box=new LinearLayout(host);box.setOrientation(LinearLayout.VERTICAL);
-        int pad=(int)(20*host.getResources().getDisplayMetrics().density);box.setPadding(pad,0,pad,0);
-        TextView notice=new TextView(host);notice.setText("ElevenLabs Scribe v2｜錄音完成並確認後才會傳送到 ElevenLabs，可能產生 API 用量。Key 只儲存在本機私有設定，不會加入對話。");
+        int pad=(int)(20*host.getResources().getDisplayMetrics().density);box.setPadding(pad,0,pad,pad);
+        scroll.addView(box);
+        TextView notice=new TextView(host);
+        notice.setText("選擇供應商後保存。錄音完成並確認後，音訊會送往選擇的接口。");
         box.addView(notice);
-        EditText key=new EditText(host);key.setSingleLine(true);key.setHint("ElevenLabs API Key");
-        key.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        key.setText(prefs.getString("key",""));box.addView(key);
-        Spinner language=new Spinner(host);
-        ArrayAdapter<String> adapter=new ArrayAdapter<>(host,android.R.layout.simple_spinner_dropdown_item,LABELS);
-        language.setAdapter(adapter);language.setSelection(Math.max(0,Math.min(LANGS.length-1,prefs.getInt("language",0))));box.addView(language);
-        dialog=new AlertDialog.Builder(host).setTitle("語音轉文字設定").setView(box)
+        Spinner provider=choices(PROVIDER_NAMES);provider.setContentDescription("辨識供應商");box.addView(provider);
+        EditText address=textField("HTTPS 接口地址或 Base URL",false);
+        EditText model=textField("轉寫模型名稱，例如 gpt-transcribe",false);
+        EditText secretId=textField("騰訊雲 SecretId",false);
+        EditText key=textField("API Key",true);
+        box.addView(address);box.addView(model);box.addView(secretId);box.addView(key);
+        Spinner language=choices(LABELS);language.setContentDescription("辨識語言");box.addView(language);
+        TextView status=new TextView(host);box.addView(status);
+        provider.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){
+            @Override public void onItemSelected(AdapterView<?> parent,View view,int selected,long id){
+                Config saved=readConfig(selected);
+                address.setVisibility(selected==1?View.VISIBLE:View.GONE);address.setText(saved.address);
+                model.setVisibility(selected==1?View.VISIBLE:View.GONE);model.setText(saved.model);
+                secretId.setVisibility(selected==2?View.VISIBLE:View.GONE);secretId.setText(saved.secretId);
+                key.setVisibility(selected==0?View.GONE:View.VISIBLE);key.setText(saved.key);
+                key.setHint(selected==2?"騰訊雲 SecretKey":"API Key");
+                language.setVisibility(selected==0?View.GONE:View.VISIBLE);
+                language.setSelection(saved.language);
+                status.setText(selected==1?"接口需支援 /audio/transcriptions。選粵語時由接口自動辨識。"
+                    :selected==2?"粵語可選專用模型，自動模式支援中英粵混說。":"");
+            }
+            @Override public void onNothingSelected(AdapterView<?> parent){}
+        });
+        provider.setSelection(providerIndex());
+        dialog=new AlertDialog.Builder(host).setTitle("語音轉文字設定").setView(scroll)
             .setNegativeButton("取消",(d,w)->cancelled("已取消"))
-            .setNeutralButton("清除 Key",(d,w)->{prefs.edit().remove("key").apply();cancelled("已清除本機 Key");})
-            .setPositiveButton("開始錄音",null).setOnCancelListener(d->cancelled("已取消")).create();
+            .setNeutralButton("清除金鑰",(d,w)->{
+                int selected=provider.getSelectedItemPosition();
+                SharedPreferences.Editor changes=prefs.edit();
+                if(selected>0){
+                    changes.remove(PROVIDERS[selected]+".key");
+                    if(selected==3)changes.remove("key");
+                }
+                if(selected==providerIndex())changes.remove("provider");
+                changes.apply();finish(PhoneService.json("ok",true));
+            })
+            .setPositiveButton("保存",null).setOnCancelListener(d->cancelled("已取消")).create();
         dialog.show();
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
-            String value=key.getText().toString().trim();
-            if(value.isEmpty()||value.length()>512||value.indexOf('\n')>=0||value.indexOf('\r')>=0){key.setError("請輸入有效 API Key");return;}
-            if(active==null)return;
-            int selected=language.getSelectedItemPosition();
-            active.key=value;active.lang=LANGS[selected];
-            prefs.edit().putString("key",value).putInt("language",selected).apply();
-            dialog.dismiss();dialog=null;
-            if(host.checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){
-                waitingPermission=true;host.requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO},PERMISSION);
-            }else startRecording();
+            int selected=provider.getSelectedItemPosition();
+            if(selected==0){
+                prefs.edit().remove("provider").apply();
+                dialog.dismiss();finish(PhoneService.json("ok",true));return;
+            }
+            Config config=new Config(selected,key.getText().toString().trim(),address.getText().toString().trim(),
+                model.getText().toString().trim(),secretId.getText().toString().trim(),language.getSelectedItemPosition());
+            try{config.validate();}
+            catch(Exception e){status.setText(e.getMessage());return;}
+            String prefix=PROVIDERS[selected]+".";
+            prefs.edit().putString("provider",PROVIDERS[selected]).putString(prefix+"key",config.key)
+                .putString(prefix+"address",config.address).putString(prefix+"model",config.model)
+                .putString(prefix+"secretId",config.secretId).putInt(prefix+"language",config.language).apply();
+            dialog.dismiss();finish(PhoneService.json("ok",true));
         });
     }
     void onPermissionResult(int request){
@@ -132,14 +240,14 @@ final class SpeechInput {
             audio=File.createTempFile("xa-stt-",".m4a",host.getCacheDir());
             recorder=new MediaRecorder();recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
             recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
-            recorder.setAudioChannels(1);recorder.setAudioEncodingBitRate(64000);recorder.setAudioSamplingRate(44100);
+            recorder.setAudioChannels(1);recorder.setAudioEncodingBitRate(64000);recorder.setAudioSamplingRate(active.config.provider==2?16000:44100);
             recorder.setOutputFile(audio.getAbsolutePath());recorder.prepare();recorder.start();
             dialog=new AlertDialog.Builder(host).setTitle("正在錄音…")
-                .setMessage("最多 120 秒。說完按「完成並轉寫」，取消或切到其他 App 不會傳送。")
+                .setMessage("最長 "+(active.config.limitMs()/1000)+" 秒。完成後會送到"+active.config.name()+"轉寫。")
                 .setPositiveButton("完成並轉寫",(d,w)->submitRecording())
                 .setNegativeButton("取消",(d,w)->discard("已取消錄音"))
                 .setOnCancelListener(d->discard("已取消錄音")).create();
-            dialog.show();ui.postDelayed(limit,LIMIT_MS);
+            dialog.show();ui.postDelayed(limit,active.config.limitMs());
         }catch(Exception e){
             releaseRecorder(false);deleteAudio();finish(PhoneService.json("ok",false,"why","無法啟動麥克風，請檢查權限或是否被其他 App 使用"));
         }
@@ -172,7 +280,7 @@ final class SpeechInput {
         final File file=audio;audio=null;final Request req=active;uploading=true;
         io.execute(()->{
             JSONObject result;
-            try{result=PhoneService.json("ok",true,"text",transcribe(file,req.key,req.lang));}
+            try{result=PhoneService.json("ok",true,"text",transcribe(file,req.config));}
             catch(IOException e){result=PhoneService.json("ok",false,"why",e.getMessage());}
             catch(Exception e){result=PhoneService.json("ok",false,"why","轉寫失敗，請確認網路及 API 設定");}
             finally{file.delete();}
@@ -180,40 +288,114 @@ final class SpeechInput {
             ui.post(()->{if(!closed&&active==req)finish(out);});
         });
     }
-    private String transcribe(File file,String key,String lang)throws Exception{
-        if(file.length()>12L*1024*1024)throw new IOException("錄音檔太大");
-        String boundary="xa-"+UUID.randomUUID();
-        HttpsURLConnection conn=(HttpsURLConnection)new URL(ENDPOINT).openConnection();
+    private static URL transcriptionEndpoint(String address)throws IOException{
+        try{
+            URI url=new URI(address);
+            if(!"https".equalsIgnoreCase(url.getScheme())||url.getHost()==null||url.getUserInfo()!=null||url.getFragment()!=null||address.length()>2048)
+                throw new IllegalArgumentException();
+            String path=url.getRawPath().replaceFirst("/+$","");
+            if(path.isEmpty())path="/v1/audio/transcriptions";
+            else if(path.endsWith("/v1"))path+="/audio/transcriptions";
+            else if(!path.endsWith("/audio/transcriptions"))return url.toURL();
+            String query=url.getRawQuery()==null?"":"?"+url.getRawQuery();
+            return new URL("https://"+url.getRawAuthority()+path+query);
+        }catch(Exception e){throw new IOException("請填寫有效的 HTTPS 語音轉文字接口地址");}
+    }
+    private String transcribe(File file,Config config)throws Exception{
+        boolean tencent=config.provider==2;
+        if(file.length()>(tencent?3L:12L)*1024*1024)throw new IOException("錄音檔太大");
+        URL endpoint=tencent?new URL("https://"+TENCENT_HOST+"/")
+            :config.provider==3?new URL(ELEVEN_ENDPOINT):transcriptionEndpoint(config.address);
+        HttpsURLConnection conn=(HttpsURLConnection)endpoint.openConnection();
         connection=conn;
         try{
             conn.setConnectTimeout(20000);conn.setReadTimeout(90000);conn.setInstanceFollowRedirects(false);
-            conn.setRequestMethod("POST");conn.setDoOutput(true);conn.setChunkedStreamingMode(16384);
-            conn.setRequestProperty("xi-api-key",key);
-            conn.setRequestProperty("Accept","application/json");
-            conn.setRequestProperty("Content-Type","multipart/form-data; boundary="+boundary);
-            try(OutputStream out=new BufferedOutputStream(conn.getOutputStream())){
-                field(out,boundary,"model_id","scribe_v2");
-                if(!lang.isEmpty())field(out,boundary,"language_code",lang);
-                field(out,boundary,"tag_audio_events","false");
-                field(out,boundary,"timestamps_granularity","none");
-                put(out,"--"+boundary+"\r\nContent-Disposition: form-data; name=\"file\"; filename=\"recording.m4a\"\r\nContent-Type: audio/mp4\r\n\r\n");
-                try(InputStream in=new FileInputStream(file)){byte[] buf=new byte[16384];int n;while((n=in.read(buf))!=-1)out.write(buf,0,n);}
-                put(out,"\r\n--"+boundary+"--\r\n");
-            }
+            conn.setRequestMethod("POST");conn.setDoOutput(true);conn.setRequestProperty("Accept","application/json");
+            if(tencent)writeTencent(conn,file,config);
+            else writeMultipart(conn,file,config);
             int code=conn.getResponseCode();
-            if(code==401||code==403)throw new IOException("ElevenLabs API Key 無效或沒有語音轉文字權限（HTTP "+code+"）");
-            if(code==429)throw new IOException("ElevenLabs 額度或請求頻率受限（HTTP 429）");
-            if(code<200||code>=300)throw new IOException("ElevenLabs 轉寫失敗（HTTP "+code+"）");
+            if(code==401||code==403)throw new IOException(config.name()+" 憑證無效或沒有轉寫權限（HTTP "+code+"）");
+            if(code==429)throw new IOException(config.name()+" 額度或請求頻率受限（HTTP 429）");
+            if(code<200||code>=300)throw new IOException(config.name()+" 轉寫失敗（HTTP "+code+"）");
             try(InputStream in=conn.getInputStream();ByteArrayOutputStream out=new ByteArrayOutputStream()){
                 byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1){if(out.size()+n>2*1024*1024)throw new IOException("轉寫回應過大");out.write(b,0,n);}
-                String text=new JSONObject(out.toString("UTF-8")).optString("text").trim();
+                JSONObject result=new JSONObject(out.toString("UTF-8"));
+                String text;
+                if(tencent){
+                    JSONObject response=result.getJSONObject("Response");
+                    if(response.has("Error")){
+                        String errorCode=response.getJSONObject("Error").optString("Code");
+                        throw new IOException("騰訊雲轉寫失敗（"+errorCode.replaceAll("[^A-Za-z0-9.]","")+"）");
+                    }
+                    text=response.optString("Result").trim();
+                }else text=result.optString("text").trim();
                 if(text.isEmpty())throw new IOException("未辨識到文字，請再試一次");
                 if(text.length()>20000)throw new IOException("轉寫文字過長");
                 return text;
             }
-        }catch(java.net.SocketTimeoutException e){throw new IOException("ElevenLabs 連線逾時，請檢查網路後重試");}
-        catch(java.net.UnknownHostException e){throw new IOException("無法連線到 ElevenLabs，請檢查網路");}
+        }catch(java.net.SocketTimeoutException e){throw new IOException(config.name()+" 連線逾時，請檢查網路後重試");}
+        catch(java.net.UnknownHostException e){throw new IOException("無法連線到"+config.name()+"，請檢查地址和網路");}
         finally{conn.disconnect();connection=null;}
+    }
+    private static void writeMultipart(HttpsURLConnection conn,File file,Config config)throws IOException{
+        boolean eleven=config.provider==3;
+        String boundary="xa-"+UUID.randomUUID();
+        conn.setRequestProperty(eleven?"xi-api-key":"Authorization",eleven?config.key:"Bearer "+config.key);
+        conn.setRequestProperty("Content-Type","multipart/form-data; boundary="+boundary);
+        ByteArrayOutputStream headers=new ByteArrayOutputStream();
+        if(eleven){
+            field(headers,boundary,"model_id","scribe_v2");
+            if(config.language!=0)field(headers,boundary,"language_code",LANGS[config.language]);
+            field(headers,boundary,"tag_audio_events","false");
+            field(headers,boundary,"timestamps_granularity","none");
+        }else{
+            field(headers,boundary,"model",config.model);
+            if(config.language>=2)field(headers,boundary,"language",config.language==2?"zh":"en");
+        }
+        put(headers,"--"+boundary+"\r\nContent-Disposition: form-data; name=\"file\"; filename=\"recording.m4a\"\r\nContent-Type: audio/mp4\r\n\r\n");
+        byte[] end=("\r\n--"+boundary+"--\r\n").getBytes(StandardCharsets.UTF_8);
+        conn.setFixedLengthStreamingMode(headers.size()+file.length()+end.length);
+        try(OutputStream out=new BufferedOutputStream(conn.getOutputStream());InputStream in=new FileInputStream(file)){
+            headers.writeTo(out);
+            byte[] buf=new byte[16384];int n;while((n=in.read(buf))!=-1)out.write(buf,0,n);
+            out.write(end);
+        }
+    }
+    private static void writeTencent(HttpsURLConnection conn,File file,Config config)throws Exception{
+        String[] engines={"16k_zh-PY","16k_yue","16k_zh","16k_en"};
+        byte[] audio=Files.readAllBytes(file.toPath());
+        byte[] body=new JSONObject().put("ProjectId",0).put("SubServiceType",2)
+            .put("EngSerViceType",engines[config.language]).put("SourceType",1).put("VoiceFormat","m4a")
+            .put("Data",Base64.getEncoder().encodeToString(audio)).put("DataLen",audio.length)
+            .toString().getBytes(StandardCharsets.UTF_8);
+        String type="application/json; charset=utf-8";
+        String action="SentenceRecognition";
+        Instant now=Instant.now();
+        String scope=now.atOffset(ZoneOffset.UTC).toLocalDate()+"/asr/tc3_request";
+        String canonical="POST\n/\n\ncontent-type:"+type+"\nhost:"+TENCENT_HOST+"\n\ncontent-type;host\n"+sha256(body);
+        String sign="TC3-HMAC-SHA256\n"+now.getEpochSecond()+"\n"+scope+"\n"+sha256(canonical.getBytes(StandardCharsets.UTF_8));
+        byte[] dateKey=hmac(("TC3"+config.key).getBytes(StandardCharsets.UTF_8),scope.substring(0,10));
+        String signature=hex(hmac(hmac(hmac(dateKey,"asr"),"tc3_request"),sign));
+        conn.setRequestProperty("Authorization","TC3-HMAC-SHA256 Credential="+config.secretId+"/"+scope+
+            ", SignedHeaders=content-type;host, Signature="+signature);
+        conn.setRequestProperty("Content-Type",type);
+        conn.setRequestProperty("X-TC-Action",action);
+        conn.setRequestProperty("X-TC-Version","2019-06-14");
+        conn.setRequestProperty("X-TC-Timestamp",Long.toString(now.getEpochSecond()));
+        conn.setFixedLengthStreamingMode(body.length);
+        try(OutputStream out=conn.getOutputStream()){out.write(body);}
+    }
+    private static byte[] hmac(byte[] key,String value)throws Exception{
+        Mac mac=Mac.getInstance("HmacSHA256");mac.init(new SecretKeySpec(key,"HmacSHA256"));
+        return mac.doFinal(value.getBytes(StandardCharsets.UTF_8));
+    }
+    private static String sha256(byte[] value)throws Exception{
+        return hex(MessageDigest.getInstance("SHA-256").digest(value));
+    }
+    private static String hex(byte[] bytes){
+        StringBuilder value=new StringBuilder(bytes.length*2);
+        for(byte b:bytes)value.append(Character.forDigit((b>>4)&15,16)).append(Character.forDigit(b&15,16));
+        return value.toString();
     }
     private static void put(OutputStream out,String s)throws IOException{out.write(s.getBytes(StandardCharsets.UTF_8));}
     private static void field(OutputStream out,String b,String k,String v)throws IOException{

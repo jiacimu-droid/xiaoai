@@ -106,7 +106,7 @@ function recordRenderTick(costMs, now) {
     framePerf.encodeCostMs = framePerf.ackCostMs = 0
 }
 // Full body for diagnostics; video calls may request a closer waist-up view.
-let framingMode = window.__luluFramingMode === 'portrait' ? 'portrait' : 'full'
+let framingMode = window.__luluFramingMode || 'full'
 let gpuLost = false
 let gpuMaxTexture = 0
 let textureDetails = ''
@@ -347,11 +347,14 @@ function fit() {
   // In portrait view the top of the model remains in shot, while the lower
   // half is intentionally below the visible viewport.
   const isPortrait = framingMode === 'portrait'
-  const heightTarget = viewHeight * (isPortrait ? 2.13 : 1.02)
-  const widthTarget = viewWidth * (isPortrait ? 2.40 : .92)
-  model.scale.set(Math.min(widthTarget / originalWidth, heightTarget / originalHeight))
+  const isCall = framingMode === 'call'
+  const heightTarget = viewHeight * (isPortrait ? 2.13 : isCall ? 1.48 : 1.02)
+  const widthTarget = viewWidth * (isPortrait ? 2.40 : isCall ? 1.32 : .92)
+  const scale = Math.min(widthTarget / originalWidth, heightTarget / originalHeight)
+  model.scale.set(scale)
   model.anchor.set(.5, .5)
-  model.position.set(viewWidth / 2, viewHeight * (isPortrait ? 1.00 : .49))
+  const top = Math.max(viewHeight * .09, (viewHeight - originalHeight * scale) / 2)
+  model.position.set(viewWidth / 2, isCall ? top + originalHeight * scale / 2 : viewHeight * (isPortrait ? 1 : .49))
   cameraBasePose = {
     model, width: viewWidth, height: viewHeight,
     scale: model.scale.x, x: model.position.x, y: model.position.y,
@@ -423,7 +426,7 @@ function cancelProximityCamera(soft = false) {
   applyProximityCameraPose()
 }
 function setFramingMode(nextMode) {
-  framingMode = nextMode === 'portrait' ? 'portrait' : 'full'
+  framingMode = nextMode === 'portrait' || nextMode === 'call' ? nextMode : 'full'
   if (app && model) {
     fit()
     app.render()
