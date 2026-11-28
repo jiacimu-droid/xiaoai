@@ -98,4 +98,87 @@ function install(){
   extra.firstElementChild.after(b);
 }
 install();
+// Both voice and Live2D calls share the existing callSay/AI/TTS pipeline.
+// No capture when ringing, muted, hidden, or while the character is speaking.
+let callCapture=null,callSession=null,callRetryAt=0,callStopped=false,callWasMuted=false;
+let callQuietUntil=0,callWasBlocked=false;
+function callStatus(text){
+  const overlay=document.getElementById('callOverlay');
+  if(!overlay)return;
+  let el=document.getElementById('xaCallSttStatus');
+  if(!el){
+    el=document.createElement('div');el.id='xaCallSttStatus';
+    el.setAttribute('role','status');
+    el.style.cssText='text-align:center;font-size:11px;line-height:1.4;padding:2px 8px;opacity:.8;flex:0 0 auto';
+    document.getElementById('callCaps')?.before(el);
+  }
+  el.textContent=text;el.hidden=!text;
+}
+function stopCallCapture(){
+  if(!callCapture||callCapture.cancelled)return;
+  callCapture.cancelled=true;
+  rpc('cancelCall').catch(()=>{});
+}
+function callReady(){
+  return callPhase==='connected'&&!callMuteOn&&!document.hidden
+    &&document.getElementById('callOverlay')?.classList.contains('show');
+}
+function speaking(){
+  const last=callLog[callLog.length-1];
+  return callBusy||!!callAudio||(last?.role==='sys'&&last.text==='正在用 MiniMax 合成語音…');
+}
+async function listenCall(){
+  const job={session:callLog,cancelled:false};callCapture=job;
+  callStatus('麥克風收音中 · 說完自動辨識');
+  try{
+    const result=await rpc('callRecord');
+    if(job.cancelled||job.session!==callLog||!callReady()||speaking())return;
+    if(result?.cancelled)return;
+    if(result?.needsSettings){
+      callStopped=true;callStatus('請先到設定 → 語音轉文字配置接口');return;
+    }
+    if(!result?.ok){
+      const why=result?.why||'語音辨識失敗';
+      if(why.includes('未辨識到文字')){callRetryAt=Date.now()+250;return;}
+      callStopped=true;callStatus(why+' · 關閉再開啟麥克風可重試');return;
+    }
+    if(result.silence)return;
+    const value=String(result.text||'').trim();
+    if(!value)return;
+    const input=document.getElementById('callInp');
+    if(!input)return;
+    const draft=input.value;
+    input.value=value;
+    try{
+      // callSay consumes the text synchronously before its first await.
+      const response=callSay();input.value=draft;
+      await response;
+    }finally{if(input.value===value)input.value=draft;}
+  }catch(e){
+    if(!job.cancelled&&job.session===callLog){callStopped=true;callStatus(String(e.message||e)+' · 重開麥克風可重試');}
+  }finally{if(callCapture===job)callCapture=null;}
+}
+function syncCallCapture(){
+  if(typeof callPhase==='undefined'||typeof callLog==='undefined')return;
+  if(callSession!==callLog){
+    stopCallCapture();callSession=callLog;callStopped=false;callRetryAt=0;callQuietUntil=0;callWasBlocked=false;callWasMuted=false;
+  }
+  if(callWasMuted&&!callMuteOn){callStopped=false;callRetryAt=0;}
+  callWasMuted=callMuteOn;
+  if(!callReady()){
+    stopCallCapture();
+    callStatus(callPhase==='connected'&&callMuteOn?'麥克風已關':'');
+    return;
+  }
+  const last=callLog[callLog.length-1];
+  if(last?.role==='sys'&&last.text==='接通了，可以直接打字講給他聽，他會回妳並用聲音念出來')callTipClear();
+  const blocked=speaking();
+  if(blocked){callWasBlocked=true;stopCallCapture();callStatus('對方回應中 · 暫停收音');return;}
+  if(callWasBlocked){callQuietUntil=Date.now()+350;callWasBlocked=false;}
+  if(callStopped||callCapture||Date.now()<Math.max(callRetryAt,callQuietUntil))return;
+  listenCall();
+}
+setInterval(syncCallCapture,120);
+document.addEventListener('visibilitychange',syncCallCapture);
+window.addEventListener('pagehide',stopCallCapture);
 })();

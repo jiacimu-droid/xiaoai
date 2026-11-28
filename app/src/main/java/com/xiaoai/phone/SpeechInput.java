@@ -41,7 +41,7 @@ import javax.net.ssl.HttpsURLConnection;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
-/** Explicit, local microphone capture; only confirmed recordings go to the selected STT API. */
+/** Local microphone capture for explicit chat recording or an active, unmuted call. */
 final class SpeechInput {
     private static final int PERMISSION=8640;
     private static final String ELEVEN_ENDPOINT="https://api.elevenlabs.io/v1/speech-to-text";
@@ -62,7 +62,7 @@ final class SpeechInput {
     private boolean waitingPermission, uploading, closed;
     private volatile HttpsURLConnection connection;
     private static final class Request {
-        final String id; final JavaScriptReplyProxy reply; Config config;
+        final String id; final JavaScriptReplyProxy reply; Config config; boolean call; volatile boolean cancelled;
         Request(String id,JavaScriptReplyProxy reply){this.id=id;this.reply=reply;}
     }
     private static final class Config {
@@ -108,9 +108,13 @@ final class SpeechInput {
                 if("status".equals(action)){
                     reply(reply,id,PhoneService.json("ok",true,"provider",selected==0?"":PROVIDER_NAMES[selected]));return;
                 }
-                if(!"record".equals(action)&&!"settings".equals(action))throw new IOException("不支援的語音操作");
+                if("cancelCall".equals(action)){
+                    if(active!=null&&active.call)cancelCall();
+                    reply(reply,id,PhoneService.json("ok",true));return;
+                }
+                if(!"record".equals(action)&&!"callRecord".equals(action)&&!"settings".equals(action))throw new IOException("不支援的語音操作");
                 if(active!=null)throw new IOException("已有語音辨識工作進行中");
-                active=new Request(id,reply);
+                active=new Request(id,reply);active.call="callRecord".equals(action);
                 if("settings".equals(action)){showSettings();return;}
                 Config config=readConfig(selected);
                 try{config.validate();}
@@ -172,7 +176,7 @@ final class SpeechInput {
         int pad=(int)(20*host.getResources().getDisplayMetrics().density);box.setPadding(pad,0,pad,pad);
         scroll.addView(box);
         TextView notice=new TextView(host);
-        notice.setText("選擇供應商後保存。錄音完成並確認後，音訊會送往選擇的接口。");
+        notice.setText("選擇供應商後保存。聊天錄音確認後送出；電話與視訊接通且麥克風開啟時，自動將說話片段送往同一接口。");
         box.addView(notice);
         Spinner provider=choices(PROVIDER_NAMES);provider.setContentDescription("辨識供應商");box.addView(provider);
         EditText address=textField("HTTPS 接口地址或 Base URL",false);
@@ -242,6 +246,10 @@ final class SpeechInput {
             recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
             recorder.setAudioChannels(1);recorder.setAudioEncodingBitRate(64000);recorder.setAudioSamplingRate(active.config.provider==2?16000:44100);
             recorder.setOutputFile(audio.getAbsolutePath());recorder.prepare();recorder.start();
+            if(active.call){
+                callStarted=android.os.SystemClock.elapsedRealtime();callLastVoice=0;callVoiceFrames=0;
+                ui.postDelayed(callVad,150);return;
+            }
             dialog=new AlertDialog.Builder(host).setTitle("正在錄音…")
                 .setMessage("最長 "+(active.config.limitMs()/1000)+" 秒。完成後會送到"+active.config.name()+"轉寫。")
                 .setPositiveButton("完成並轉寫",(d,w)->submitRecording())
@@ -251,6 +259,32 @@ final class SpeechInput {
         }catch(Exception e){
             releaseRecorder(false);deleteAudio();finish(PhoneService.json("ok",false,"why","無法啟動麥克風，請檢查權限或是否被其他 App 使用"));
         }
+    }
+    private long callStarted,callLastVoice;
+    private int callVoiceFrames;
+    private final Runnable callVad=this::pollCallVoice;
+    private void pollCallVoice(){
+        if(active==null||!active.call||recorder==null)return;
+        long now=android.os.SystemClock.elapsedRealtime();
+        try{
+            int amp=recorder.getMaxAmplitude();
+            if(amp>=900){callLastVoice=now;callVoiceFrames++;}
+            boolean spoke=callVoiceFrames>=2;
+            if(spoke&&(now-callLastVoice>=900||now-callStarted>=25000)){submitRecording();return;}
+            if(!spoke&&now-callStarted>=12000){
+                releaseRecorder(false);deleteAudio();finish(PhoneService.json("ok",true,"silence",true));return;
+            }
+            ui.postDelayed(callVad,150);
+        }catch(RuntimeException e){
+            releaseRecorder(false);deleteAudio();finish(PhoneService.json("ok",false,"why","通話錄音失敗"));
+        }
+    }
+    private void cancelCall(){
+        Request req=active;
+        if(req==null||!req.call)return;
+        req.cancelled=true;
+        HttpsURLConnection c=connection;if(uploading&&c!=null)c.disconnect();
+        discard("通話收音已停止");
     }
     private final Runnable limit=this::onLimit;
     private void onLimit(){
@@ -264,7 +298,7 @@ final class SpeechInput {
             .setOnCancelListener(d->discard("已取消錄音")).create();dialog.show();
     }
     private boolean releaseRecorder(boolean stop){
-        ui.removeCallbacks(limit);MediaRecorder r=recorder;recorder=null;
+        ui.removeCallbacks(limit);ui.removeCallbacks(callVad);MediaRecorder r=recorder;recorder=null;
         if(r==null)return true;
         boolean ok=true;
         try{if(stop)r.stop();}catch(RuntimeException e){ok=false;}
@@ -280,7 +314,7 @@ final class SpeechInput {
         final File file=audio;audio=null;final Request req=active;uploading=true;
         io.execute(()->{
             JSONObject result;
-            try{result=PhoneService.json("ok",true,"text",transcribe(file,req.config));}
+            try{if(req.cancelled)throw new IOException("已取消");result=PhoneService.json("ok",true,"text",transcribe(file,req.config,req));}
             catch(IOException e){result=PhoneService.json("ok",false,"why",e.getMessage());}
             catch(Exception e){result=PhoneService.json("ok",false,"why","轉寫失敗，請確認網路及 API 設定");}
             finally{file.delete();}
@@ -301,7 +335,7 @@ final class SpeechInput {
             return new URL("https://"+url.getRawAuthority()+path+query);
         }catch(Exception e){throw new IOException("請填寫有效的 HTTPS 語音轉文字接口地址");}
     }
-    private String transcribe(File file,Config config)throws Exception{
+    private String transcribe(File file,Config config,Request req)throws Exception{
         boolean tencent=config.provider==2;
         if(file.length()>(tencent?3L:12L)*1024*1024)throw new IOException("錄音檔太大");
         URL endpoint=tencent?new URL("https://"+TENCENT_HOST+"/")
@@ -309,6 +343,7 @@ final class SpeechInput {
         HttpsURLConnection conn=(HttpsURLConnection)endpoint.openConnection();
         connection=conn;
         try{
+            if(req.cancelled)throw new IOException("已取消");
             conn.setConnectTimeout(20000);conn.setReadTimeout(90000);conn.setInstanceFollowRedirects(false);
             conn.setRequestMethod("POST");conn.setDoOutput(true);conn.setRequestProperty("Accept","application/json");
             if(tencent)writeTencent(conn,file,config);
@@ -401,7 +436,7 @@ final class SpeechInput {
     private static void field(OutputStream out,String b,String k,String v)throws IOException{
         put(out,"--"+b+"\r\nContent-Disposition: form-data; name=\""+k+"\"\r\n\r\n"+v+"\r\n");
     }
-    void onPause(){if(recorder!=null||audio!=null)discard("已離開錄音畫面，未傳送音訊");}
+    void onPause(){if(active!=null&&active.call&&!waitingPermission)cancelCall();else if(recorder!=null||audio!=null)discard("已離開錄音畫面，未傳送音訊");}
     void close(){
         closed=true;ui.removeCallbacks(limit);releaseRecorder(false);deleteAudio();
         if(dialog!=null){dialog.dismiss();dialog=null;}
