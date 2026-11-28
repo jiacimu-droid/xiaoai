@@ -6,6 +6,8 @@ const STAGE='https://live2d.xiaoai.invalid';
 const icon='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="5"/><path d="M7 15c1.5-3 8.5-3 10 0M9 9v.8m6-.8v.8M9 18h6"/></svg>';
 let panel=null,serial=0,seq=0;
 const pending=new Map();
+// Per-call perception survives minimizing and switching to voice. No touch initiates a model request.
+const callPerception=new WeakMap();
 function toastLocal(s){try{toast(s);}catch(_){console.warn(s);}}
 function rpc(action,role){
   return new Promise((resolve,reject)=>{
@@ -48,7 +50,7 @@ function close(){
 }
 function unmountFrame(p){
   if(p.frame){p.frame.remove();p.frame=null;}
-  p.ready=false;p.stage.replaceChildren();
+  p.ready=false;p.parameters=[];p.stage.replaceChildren();
 }
 function calibrationKey(p){return 'xaLive2DZones:'+p.role+':'+String(p.data?.model||'');}
 function savedZones(p){
@@ -200,7 +202,6 @@ function tick(p){
       else if(pending&&!callAudio&&!callBusy&&last?.role==='sys'&&/語音失敗|語音放不出來/.test(last.text)){
         p.pendingVisual=null;const cue=verifiedCue(p,pending.choice);if(cue)send(p,'perform',{cue,immediate:true});
       }
-      dispatchTouchTurn(p);
     }
   }
 }
@@ -216,42 +217,62 @@ function touchMode(p){
   }
   return row;
 }
+const faceChannels={gazeX:['ParamEyeBallX'],gazeY:['ParamEyeBallY'],smile:['ParamMouthForm'],eyeSmile:['ParamEyeLSmile','ParamEyeRSmile'],eyeOpen:['ParamEyeLOpen','ParamEyeROpen'],browX:['ParamBrowLX','ParamBrowRX'],browY:['ParamBrowLY','ParamBrowRY'],browAngle:['ParamBrowLAngle','ParamBrowRAngle'],browForm:['ParamBrowLForm','ParamBrowRForm'],squint:['ParamEyeLSquint','ParamEyeRSquint'],cheekPuff:['ParamCheekPuff'],pout:['ParamMouthFunnel']};
+const headChannels={yaw:['ParamAngleX'],pitch:['ParamAngleY'],roll:['ParamAngleZ']};
+const bodyChannels={yaw:['ParamBodyAngleX'],pitch:['ParamBodyAngleY'],roll:['ParamBodyAngleZ']};
+const positiveFace=new Set(['eyeOpen','eyeSmile','squint','cheekPuff','pout']);
+function supportedChannels(p,bindings){
+  const ids=new Set(p?.parameters||[]);
+  return Object.keys(bindings).filter(key=>bindings[key].every(id=>ids.has(id)));
+}
+function checkedPose(raw,allowed,limit,positive=new Set()){
+  if(!raw||typeof raw!=='object'||Array.isArray(raw))return null;
+  const out={};
+  for(const key of allowed){
+    const n=raw[key];
+    if(typeof n==='number'&&Number.isFinite(n))out[key]=Math.max(positive.has(key)?0:-limit,Math.min(limit,n));
+  }
+  return Object.keys(out).length?out:null;
+}
 function verifiedCue(p,choice){
   if(!choice||!p?.data||choice.role!==p.role||choice.model!==p.data.model)return null;
   const cue={};
-  if(choice.motion&&p.data.motions.some(m=>m.group===choice.motion.group&&m.index===choice.motion.index)){
-    cue.motion={group:choice.motion.group,index:choice.motion.index};
-    if(choice.motion.face)cue.face=choice.motion.face;
-  }
+  const motion=choice.motion&&p.data.motions.find(m=>m.group===choice.motion.group&&m.index===choice.motion.index);
+  if(motion)cue.motion={group:motion.group,index:motion.index};
   if(choice.expression&&p.data.expressions.includes(choice.expression))cue.expression=choice.expression;
-  return cue.motion||cue.expression?cue:null;
+  const face=checkedPose(choice.face||motion?.face,supportedChannels(p,faceChannels),1,positiveFace);
+  if(face)cue.face=face;
+  // A real Motion3 owns the head/body curves. Never fight it with another pose.
+  if(!motion){
+    const head=checkedPose(choice.head,supportedChannels(p,headChannels),25);
+    const body=checkedPose(choice.body,supportedChannels(p,bodyChannels),10);
+    if(head)cue.head=head;if(body)cue.body=body;
+  }
+  return Object.keys(cue).length?cue:null;
 }
 const touchRegions={hair:'頭髮',forehead:'額頭','eye-left':'左眼','eye-right':'右眼','ear-left':'左耳','ear-right':'右耳','beast-ear-left':'左獸耳','beast-ear-right':'右獸耳','cheek-left':'左臉頰','cheek-right':'右臉頰',nose:'鼻子',mouth:'嘴唇',neck:'頸部',throat:'喉部',collarbone:'鎖骨',chest:'胸口','arm-left':'左臂','arm-right':'右臂','hand-left':'左手','hand-right':'右手',body:'身體'};
 const touchGestures={tap:'輕觸',hold:'按住','stroke-left':'向左撫摸','stroke-right':'向右撫摸','stroke-up':'向上撫摸','stroke-down':'向下撫摸',kiss:'親吻',slap:'拍打','slap-left':'向左扇巴掌','slap-right':'向右扇巴掌'};
+function perception(session){
+  let state=callPerception.get(session);
+  if(!state){state={pending:[],recent:[],next:0};callPerception.set(session,state);}
+  return state;
+}
 function acceptTouch(p,d){
   if(!Object.hasOwn(touchRegions,d.region)||!Object.hasOwn(touchGestures,d.gesture))return;
   const duration=Math.max(0,Math.min(30000,Number(d.durationMs)||0));
   const receipt=touchGestures[d.gesture]+' · '+touchRegions[d.region]+'（'+Math.round(duration/100)/10+' 秒）';
   if(p.touchReceipt)p.touchReceipt.textContent=receipt;
   if(p.kind!=='call'||p.session!==callLog||callPhase!=='connected')return;
-  (p.touchEvents??=[]).push(receipt);
-  if(p.touchEvents.length>12)p.touchEvents.shift();
-  p.touchDue=Date.now()+900;
+  const state=perception(p.session);
+  state.pending.push({id:++state.next,time:Date.now(),region:d.region,gesture:d.gesture,duration,receipt});
+  // No callSay, no synthetic user utterance, no microphone interruption.
 }
-function dispatchTouchTurn(p){
-  if(!p.touchEvents?.length||!p.touchDue||Date.now()<p.touchDue||p.session!==callLog||callPhase!=='connected'||callBusy||callAudio||document.hidden)return;
-  const last=callLog[callLog.length-1];
-  if(last?.role==='sys'&&last.text==='正在用 MiniMax 合成語音…')return;
-  const input=document.getElementById('callInp');
-  if(!input||input.value.trim())return;
-  // Reuse the real call request, TTS, subtitles and history. The explicit
-  // observation is not a fabricated spoken sentence. One request per burst.
-  p.touchDue=0;
-  const draft=input.value;
-  input.value='【視訊感知事件，非語音】對方剛才觸摸了你：'+p.touchEvents.join('；');
-  p.touchOnly=true;
-  try{Promise.resolve(callSay()).catch(e=>console.warn('Live2D touch response',e));}
-  finally{input.value=draft;p.touchOnly=false;}
+function describeTouches(events){
+  if(!events.length)return '';
+  const old=events.slice(0,Math.max(0,events.length-24)),recent=events.slice(-24);
+  const counts=new Map();
+  for(const e of old){const label=touchGestures[e.gesture]+' · '+touchRegions[e.region];counts.set(label,(counts.get(label)||0)+1);}
+  return [...Array.from(counts,([label,count])=>label+' ×'+count),...recent.map(e=>e.receipt)].join('；');
 }
 function showMotion(p,motion){
   send(p,'motion',{motion});
@@ -373,6 +394,8 @@ window.addEventListener('message',event=>{
       if(!p.ready&&d.phase==='error')p.status.textContent='皮套無法顯示，請在 Live2D 檢驗確認';
     }
     controls(p);
+  }else if(d.type==='xa-live2d-capabilities'&&p.ready&&Array.isArray(d.parameters)){
+    p.parameters=d.parameters.filter(id=>typeof id==='string'&&/^Param[A-Za-z0-9_]+$/.test(id)).slice(0,128);
   }else if(d.type==='xa-live2d-touch'&&p.ready){
     acceptTouch(p,d);
   }else if(d.type==='xa-live2d-calibration'&&d.calibration&&typeof d.calibration==='object'){
@@ -380,28 +403,43 @@ window.addEventListener('message',event=>{
   }
 });
 function callMotionOptions(){
-  const p=panel;
-  if(p?.kind!=='call'||!p.ready||!p.data||p.session!==callLog)return null;
-  const motions=(p.data.motions||[]).filter(m=>!/^idle$/i.test(m.group));
-  const expressions=p.data.expressions||[];
+  const session=callLog,state=perception(session),p=panel;
+  const visible=p?.kind==='call'&&p.ready&&p.data&&p.session===session;
+  const touches=state.pending.slice(),lastId=touches.at(-1)?.id||0;
+  const observed=(state.recent.length?'\n【本次通話先前已感知的觸摸，非新事件】'+describeTouches(state.recent):'')+
+    (touches.length?'\n【本輪新增真實觸摸感知，非用戶口述】'+describeTouches(touches):'');
+  if(!visible&&!observed)return null;
+  const motions=visible?(p.data.motions||[]).filter(m=>!/^idle$/i.test(m.group)):[];
+  const expressions=visible?p.data.expressions||[]:[];
   const directory=motions.map((m,i)=>i+'='+m.name+(m.fits?'（'+String(m.fits).slice(0,180)+'）':'')).join('、');
   const faces=expressions.map((name,i)=>i+'='+name).join('、');
-  const touches=p.touchEvents?.splice(0)||[];
-  p.touchDue=0;
-  const observed=touches.length&&!p.touchOnly?'\n【當前視訊真實觸摸感知，並非用戶說出的台詞】'+touches.join('；'):'';
+  const faceKeys=supportedChannels(visible?p:null,faceChannels);
+  const headKeys=supportedChannels(visible?p:null,headChannels);
+  const bodyKeys=supportedChannels(visible?p:null,bodyChannels);
   return {
-    prompt:'\n【Live2D 視訊表演】你正在與對方視訊，身體與面部是你能主動控制的。每次回覆都依當下情緒、關係、對話和觸摸感受，自主選擇合適的真實動作與表情；不是讓對方替你選。可只選一種，也可兩種同時選；真的不適合才留空，不要虛構不存在的動作。若收到視訊感知事件，先理解被觸摸的部位與方式，再自主決定如何回應；系統本地反射不是你的有意識決策。正常台詞之後附 [L2D:動作編號] 和 [L2E:表情編號]，只用目錄內數字，不要讀出標記。\n動作：'+(directory||'無')+'\n表情：'+(faces||'無')+observed,
+    prompt:observed+(visible?'\n【Live2D 視訊表演】請將對方本輪話語及真實觸摸一起理解。觸摸的本地反射只是物理呈現，不代表你本人感到害羞或喜歡。依你的性格、情緒及此刻想法，自主選擇台詞及身體表演，不必每次都使用全部通道，不要虛構資源。台詞後可附 [L2D:動作編號] [L2E:表情編號]，也可附 [L2P]{"face":{"gazeX":0.3,"eyeOpen":0.8,"smile":0.4},"head":{"yaw":8},"body":{"roll":3}}[/L2P]，僅使用下列實際通道；不把標記念出來。face數值-1至1（eyeOpen、eyeSmile、squint、cheekPuff、pout為0至1），head角度±25、body±10；有原生動作時不要再指定head/body。口型開合由真實語音驅動，嘴角與神態可自主選擇。\n動作：'+(directory||'無')+'\n表情：'+(faces||'無')+'\nface通道：'+(faceKeys.join('、')||'無')+'\nhead通道：'+(headKeys.join('、')||'無')+'\nbody通道：'+(bodyKeys.join('、')||'無'):''),
     parse(reply){
-      if(typeof reply!=='string')return {reply,motion:null};
-      let motion=null,expression=null;
-      const text=reply.replace(/\[(L2D|L2E):(\d{1,4})\]/gi,(_,kind,index)=>{
+      if(typeof reply!=='string'||!reply.trim())return {reply,motion:null};
+      if(session===callLog&&lastId){
+        // Only acknowledge the snapshot after a real model reply; preserve
+        // contacts arriving during inference and retry after a failed request.
+        state.pending=state.pending.filter(e=>e.id>lastId);
+        state.recent=state.recent.concat(touches).slice(-12);
+      }
+      let motion=null,expression=null,pose={};
+      let text=reply.replace(/\[L2P\]([\s\S]*?)\[\/L2P\]/gi,(_,raw)=>{
+        if(raw.length<=2048)try{const v=JSON.parse(raw);if(v&&typeof v==='object'&&!Array.isArray(v))pose=v;}catch(_){}
+        return '';
+      }).replace(/\[(L2D|L2E):(\d{1,4})\]/gi,(_,kind,index)=>{
         if(kind.toUpperCase()==='L2D')motion=motions[Number(index)]||motion;
         else expression=expressions[Number(index)]||expression;
         return '';
       });
       if(!expression&&motion&&expressions.includes(motion.expression))expression=motion.expression;
-      const choice=motion||expression?{role:p.role,model:p.data.model,motion,expression}:null;
-      return {reply:text.trim(),motion:choice};
+      const choice=visible?{role:p.role,model:p.data.model,motion,expression,
+        face:checkedPose(pose.face,faceKeys,1,positiveFace),
+        head:checkedPose(pose.head,headKeys,25),body:checkedPose(pose.body,bodyKeys,10)}:null;
+      return {reply:text.trim(),motion:choice&&verifiedCue(p,choice)?choice:null};
     }
   };
 }
